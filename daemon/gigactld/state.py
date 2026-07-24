@@ -10,13 +10,20 @@ from . import curve
 DEFAULT_PATH = "/var/lib/gigactl/state.json"
 
 
-def snapshot(engine) -> dict:
-    return {
+def snapshot(engine, kbd=None) -> dict:
+    """Serialise the fan profile, plus the keyboard state when one is given.
+    The keyboard rides in the same file so both restore from one atomic write;
+    each domain owns its own dict shape (``kbd.to_dict()``) so this module never
+    has to know the keyboard's fields."""
+    data = {
         "profile": engine.profile,
         "linked": engine.linked,
         "cpu": [list(p) for p in engine.curve_for(curve.CPU_FAN)],
         "gpu": [list(p) for p in engine.curve_for(curve.GPU_FAN)],
     }
+    if kbd is not None:
+        data["keyboard"] = kbd.to_dict()
+    return data
 
 
 def save(path: str, data: dict) -> None:

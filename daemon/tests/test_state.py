@@ -1,5 +1,6 @@
 """Profile persistence — save/load/restore round-trips, no hardware."""
 from gigactld import state, curve
+from gigactld import keyboard as kb
 
 
 def test_save_load_roundtrip(tmp_path):
@@ -42,3 +43,25 @@ def test_restore_custom_curve_survives_roundtrip(tmp_path):
     assert dst.profile == "custom"
     # the restored curve behaves like the original
     assert dst.decide(curve.CPU_FAN, 95) == src.decide(curve.CPU_FAN, 95)
+
+
+# --- keyboard section: rides in the same state.json as the fan profile --------
+
+def test_snapshot_omits_keyboard_when_not_given():
+    e = curve.ProfileEngine()
+    assert "keyboard" not in state.snapshot(e)
+
+
+def test_snapshot_includes_keyboard_when_given():
+    e = curve.ProfileEngine()
+    ks = kb.KeyboardState(enabled=True, r=10, g=20, b=30, brightness_pct=40)
+    assert state.snapshot(e, ks)["keyboard"] == ks.to_dict()
+
+
+def test_keyboard_survives_save_load_roundtrip(tmp_path):
+    e = curve.ProfileEngine()
+    ks = kb.KeyboardState(enabled=False, r=255, g=0, b=0, brightness_pct=75)
+    p = str(tmp_path / "state.json")
+    state.save(p, state.snapshot(e, ks))
+    loaded = kb.KeyboardState.from_dict(state.load(p)["keyboard"])
+    assert loaded == ks

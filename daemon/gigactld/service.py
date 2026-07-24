@@ -76,6 +76,7 @@ class Daemon:
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._loop = GLib.MainLoop()
         self.engine = curve.ProfileEngine(hysteresis=curve.HYSTERESIS_C)
+        self.keyboard = keyboard.KeyboardState()
         self.state_path = state.DEFAULT_PATH
 
     # --- lifecycle -----------------------------------------------------------
@@ -121,11 +122,12 @@ class Daemon:
             )
         except Exception as exc:  # pragma: no cover - environment dependent
             print(f"gigactld: object registration skipped ({exc})", flush=True)
-        self._restore_saved_profile()
+        self._restore_saved_state()
+        self._subscribe_sleep(conn)
         GLib.timeout_add_seconds(self.interval_s, self._tick)
         self._tick()  # emit + apply immediately, don't wait a full interval
 
-    def _restore_saved_profile(self) -> None:
+    def _restore_saved_state(self) -> None:
         data = state.load(self.state_path)
         if not data:
             return
@@ -134,6 +136,46 @@ class Daemon:
             print(f"gigactld: restored profile '{self.engine.profile}'", flush=True)
         except Exception as exc:
             print(f"gigactld: could not restore saved profile: {exc}", flush=True)
+        # Keyboard is optional: only re-apply if we actually saved one, so a
+        # fresh install doesn't force the firmware default onto the backlight.
+        kd = data.get("keyboard")
+        if kd:
+            self.keyboard = keyboard.KeyboardState.from_dict(kd)
+            self._apply_keyboard("boot")
+
+    def _apply_keyboard(self, why: str) -> None:
+        """Re-drive the backlight to the remembered state. Best-effort and
+        self-contained — it runs from a signal callback, so an exception must
+        not escape into the GLib loop."""
+        try:
+            self.keyboard.apply(self.ec)
+            print(f"gigactld: keyboard re-applied ({why})", flush=True)
+        except Exception as exc:
+            print(f"gigactld: keyboard apply failed ({why}): {exc}", flush=True)
+
+    def _subscribe_sleep(self, conn: Gio.DBusConnection) -> None:
+        """Listen for logind's PrepareForSleep so we can re-apply the backlight
+        on resume (the EC drops it across suspend). Receiving a broadcast signal
+        needs no extra D-Bus policy."""
+        try:
+            conn.signal_subscribe(
+                "org.freedesktop.login1",           # sender
+                "org.freedesktop.login1.Manager",   # interface
+                "PrepareForSleep",                  # signal
+                "/org/freedesktop/login1",          # path
+                None,                               # arg0 filter
+                Gio.DBusSignalFlags.NONE,
+                self._on_prepare_for_sleep,
+            )
+        except Exception as exc:  # pragma: no cover - environment dependent
+            print(f"gigactld: could not subscribe to logind sleep signal ({exc})", flush=True)
+
+    def _on_prepare_for_sleep(self, conn, sender, path, iface, signal, params):
+        # PrepareForSleep(true) fires before sleep, (false) after resume; the
+        # backlight only needs re-driving on the resume edge.
+        (going_to_sleep,) = params.unpack()
+        if not going_to_sleep:
+            self._apply_keyboard("resume")
 
     def _on_name_acquired(self, conn, name: str) -> None:
         print(f"gigactld: owning {name} (EC backend: {self.ec.backend.name})", flush=True)
@@ -264,7 +306,7 @@ class Daemon:
 
     def _persist(self) -> None:
         try:
-            state.save(self.state_path, state.snapshot(self.engine))
+            state.save(self.state_path, state.snapshot(self.engine, self.keyboard))
         except Exception as exc:
             print(f"gigactld: could not persist state: {exc}", flush=True)
 
@@ -313,6 +355,10 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_color(self.ec, r, g, b)
+        # set_color master-enables, so the backlight is now on.
+        self.keyboard.r, self.keyboard.g, self.keyboard.b = r, g, b
+        self.keyboard.enabled = True
+        self._persist()
         invocation.return_value(None)
 
     def _set_keyboard_brightness(self, sender, params, invocation) -> None:
@@ -323,6 +369,10 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_brightness(self.ec, percent)
+        # set_brightness master-enables, so the backlight is now on.
+        self.keyboard.brightness_pct = percent
+        self.keyboard.enabled = True
+        self._persist()
         invocation.return_value(None)
 
     def _set_keyboard_enabled(self, sender, params, invocation) -> None:
@@ -330,6 +380,8 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_enabled(self.ec, on)
+        self.keyboard.enabled = on
+        self._persist()
         invocation.return_value(None)
 
     def stop(self) -> None:

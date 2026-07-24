@@ -10,6 +10,8 @@ and trust the (hardware-proven) sequence.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .mailbox import command, pct_to_byte
 
 DOORBELL_KB = 0xCA      # colour / brightness
@@ -43,3 +45,44 @@ def set_brightness(ec, pct: int) -> None:
         raise ValueError(f"brightness percent out of range: {pct}")
     set_enabled(ec, True)
     command(ec, SUB_BRIGHT, (pct_to_byte(pct),), doorbell=DOORBELL_KB)
+
+
+@dataclass
+class KeyboardState:
+    """The last backlight state the daemon was told to set. The EC forgets the
+    backlight on power-cycle and on suspend, so the daemon holds this, persists
+    it, and re-applies it at boot and on resume. The defaults are the firmware
+    default (enabled, blue, full brightness) — used only as a starting point
+    before the user sets anything; a fresh install with no saved state never
+    applies these (see ``Daemon._restore_saved_state``)."""
+
+    enabled: bool = True
+    r: int = 0
+    g: int = 0
+    b: int = 255
+    brightness_pct: int = 100
+
+    def to_dict(self) -> dict:
+        return {"enabled": self.enabled, "r": self.r, "g": self.g,
+                "b": self.b, "brightness": self.brightness_pct}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "KeyboardState":
+        """Rebuild from a (possibly hand-edited) state dict, tolerating missing
+        keys and clamping brightness so a slightly-off value still applies."""
+        return cls(
+            enabled=bool(d.get("enabled", True)),
+            r=int(d.get("r", 0)),
+            g=int(d.get("g", 0)),
+            b=int(d.get("b", 255)),
+            brightness_pct=max(0, min(100, int(d.get("brightness", 100)))),
+        )
+
+    def apply(self, ec) -> None:
+        """Re-drive the hardware to match this state (rgb is clamped downstream
+        by ``set_color``)."""
+        if self.enabled:
+            set_color(ec, self.r, self.g, self.b)  # also master-enables
+            set_brightness(ec, self.brightness_pct)
+        else:
+            set_enabled(ec, False)

@@ -74,3 +74,44 @@ def test_brightness_out_of_range_rejected():
     ec = RecordingEc()
     with pytest.raises(ValueError):
         kb.set_brightness(ec, 150)
+
+
+# --- KeyboardState: the persisted last-set state, re-applied at boot/resume ---
+
+def test_keyboard_state_dict_roundtrip():
+    s = kb.KeyboardState(enabled=True, r=255, g=128, b=0, brightness_pct=60)
+    assert kb.KeyboardState.from_dict(s.to_dict()) == s
+
+
+def test_keyboard_state_from_dict_fills_defaults():
+    s = kb.KeyboardState.from_dict({})  # nothing saved
+    assert s == kb.KeyboardState()      # firmware default: enabled blue, full
+    assert (s.b, s.brightness_pct, s.enabled) == (255, 100, True)
+
+
+def test_keyboard_state_from_dict_clamps_brightness():
+    assert kb.KeyboardState.from_dict({"brightness": 999}).brightness_pct == 100
+    assert kb.KeyboardState.from_dict({"brightness": -5}).brightness_pct == 0
+
+
+def test_apply_enabled_writes_colour_then_brightness():
+    ec = RecordingEc()
+    kb.KeyboardState(enabled=True, r=255, g=0, b=0, brightness_pct=50).apply(ec)
+    # colour block (B,R,G) then brightness block; each master-enables first
+    assert (mailbox.FCMD, kb.DOORBELL_ENABLE) in ec.writes
+    assert (mailbox.FDAT, kb.SUB_COLOR) in ec.writes
+    assert ec.writes[-3:] == [
+        (mailbox.FDAT, kb.SUB_BRIGHT),
+        (mailbox.FBUF, mailbox.pct_to_byte(50)),
+        (mailbox.FCMD, kb.DOORBELL_KB),
+    ]
+
+
+def test_apply_disabled_only_disables():
+    ec = RecordingEc()
+    kb.KeyboardState(enabled=False, r=255, g=0, b=0).apply(ec)
+    assert ec.writes == [
+        (mailbox.FDAT, kb.ENABLE_SUB),
+        (mailbox.FBUF, kb.ENABLE_OFF),
+        (mailbox.FCMD, kb.DOORBELL_ENABLE),
+    ]
