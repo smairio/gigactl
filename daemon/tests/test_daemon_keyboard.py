@@ -69,12 +69,35 @@ def test_boot_restores_saved_keyboard(tmp_path):
     assert (mailbox.FDAT, kb.SUB_COLOR) in d.ec.writes  # applied at boot
 
 
-def test_boot_without_keyboard_section_leaves_hardware_untouched(tmp_path):
+def test_fan_only_persist_writes_no_keyboard_section_and_boot_untouched(tmp_path):
+    # Drive the REAL persist path a fan-only user takes: keyboard never set, so
+    # self.keyboard stays None. (A test that hand-built snapshot(engine) with no
+    # kbd arg would pass even with the bug — this one wouldn't.)
     p = str(tmp_path / "state.json")
-    state.save(p, state.snapshot(_daemon().engine))  # fan-only, no keyboard
+    d1 = _daemon()
+    d1.state_path = p
+    d1.engine.set_profile("balanced")
+    d1._persist()
+    assert "keyboard" not in state.load(p)  # fan-only => no keyboard section
 
+    d2 = _daemon()
+    d2.state_path = p
+    d2._restore_saved_state()
+    # nothing saved for the keyboard => don't force firmware default onto it
+    assert not any(off == mailbox.FDAT and val == kb.SUB_COLOR for off, val in d2.ec.writes)
+
+
+def test_keyboard_set_creates_and_persists_section(tmp_path):
+    p = str(tmp_path / "state.json")
     d = _daemon()
     d.state_path = p
-    d._restore_saved_state()
-    # no keyboard section => don't force firmware default onto the backlight
-    assert not any(off == mailbox.FDAT and val == kb.SUB_COLOR for off, val in d.ec.writes)
+    assert d.keyboard is None  # lazy: nothing until the user sets something
+    d._remember_keyboard().record_colour(255, 0, 0)
+    d._persist()
+    assert state.load(p)["keyboard"]["r"] == 255
+
+
+def test_resume_without_prior_set_is_noop():
+    d = _daemon()  # fresh: keyboard never set
+    d._on_prepare_for_sleep(*_sleep_signal(going_to_sleep=False))
+    assert d.ec.writes == []  # nothing remembered => nothing to re-drive

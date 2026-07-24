@@ -67,7 +67,7 @@ class KeyboardState:
                 "b": self.b, "brightness": self.brightness_pct}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "KeyboardState":
+    def from_dict(cls, d: dict) -> KeyboardState:
         """Rebuild from a (possibly hand-edited) state dict, tolerating missing
         keys and clamping brightness so a slightly-off value still applies."""
         return cls(
@@ -77,6 +77,21 @@ class KeyboardState:
             b=int(d.get("b", 255)),
             brightness_pct=max(0, min(100, int(d.get("brightness", 100)))),
         )
+
+    def record_colour(self, r: int, g: int, b: int) -> None:
+        """Remember a colour the user set. Setting a colour also turns the
+        backlight on, so ``enabled`` follows."""
+        self.r, self.g, self.b = r, g, b
+        self.enabled = True
+
+    def record_brightness(self, pct: int) -> None:
+        """Remember a brightness the user set (also turns the backlight on)."""
+        self.brightness_pct = pct
+        self.enabled = True
+
+    def record_enabled(self, on: bool) -> None:
+        """Remember the on/off state the user set."""
+        self.enabled = on
 
     def apply(self, ec) -> None:
         """Re-drive the hardware to match this state (rgb is clamped downstream

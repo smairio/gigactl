@@ -76,7 +76,10 @@ class Daemon:
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._loop = GLib.MainLoop()
         self.engine = curve.ProfileEngine(hysteresis=curve.HYSTERESIS_C)
-        self.keyboard = keyboard.KeyboardState()
+        # Lazily created on first keyboard set (see _remember_keyboard): while
+        # it's None the daemon writes no keyboard section and re-applies nothing,
+        # so a fan-only user's backlight is never touched.
+        self.keyboard: keyboard.KeyboardState | None = None
         self.state_path = state.DEFAULT_PATH
 
     # --- lifecycle -----------------------------------------------------------
@@ -144,9 +147,11 @@ class Daemon:
             self._apply_keyboard("boot")
 
     def _apply_keyboard(self, why: str) -> None:
-        """Re-drive the backlight to the remembered state. Best-effort and
-        self-contained — it runs from a signal callback, so an exception must
-        not escape into the GLib loop."""
+        """Re-drive the backlight to the remembered state, if the user has set
+        one. Best-effort and self-contained — it runs from a signal callback, so
+        an exception must not escape into the GLib loop."""
+        if self.keyboard is None:
+            return
         try:
             self.keyboard.apply(self.ec)
             print(f"gigactld: keyboard re-applied ({why})", flush=True)
@@ -170,7 +175,7 @@ class Daemon:
         except Exception as exc:  # pragma: no cover - environment dependent
             print(f"gigactld: could not subscribe to logind sleep signal ({exc})", flush=True)
 
-    def _on_prepare_for_sleep(self, conn, sender, path, iface, signal, params):
+    def _on_prepare_for_sleep(self, conn, sender, path, iface, signal_name, params):
         # PrepareForSleep(true) fires before sleep, (false) after resume; the
         # backlight only needs re-driving on the resume edge.
         (going_to_sleep,) = params.unpack()
@@ -346,6 +351,14 @@ class Daemon:
         return self._authorized(sender, invocation,
                                 authz.ACTION_CONTROL_KEYBOARD, "the keyboard")
 
+    def _remember_keyboard(self) -> keyboard.KeyboardState:
+        """Keyboard state is created lazily on first use, so a user who only
+        ever touches the fans never gets a keyboard section written — and thus
+        never has the firmware default re-applied at boot."""
+        if self.keyboard is None:
+            self.keyboard = keyboard.KeyboardState()
+        return self.keyboard
+
     def _set_keyboard_color(self, sender, params, invocation) -> None:
         r, g, b = params.unpack()
         if not all(0 <= c <= 255 for c in (r, g, b)):
@@ -355,9 +368,7 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_color(self.ec, r, g, b)
-        # set_color master-enables, so the backlight is now on.
-        self.keyboard.r, self.keyboard.g, self.keyboard.b = r, g, b
-        self.keyboard.enabled = True
+        self._remember_keyboard().record_colour(r, g, b)
         self._persist()
         invocation.return_value(None)
 
@@ -369,9 +380,7 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_brightness(self.ec, percent)
-        # set_brightness master-enables, so the backlight is now on.
-        self.keyboard.brightness_pct = percent
-        self.keyboard.enabled = True
+        self._remember_keyboard().record_brightness(percent)
         self._persist()
         invocation.return_value(None)
 
@@ -380,7 +389,7 @@ class Daemon:
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_enabled(self.ec, on)
-        self.keyboard.enabled = on
+        self._remember_keyboard().record_enabled(on)
         self._persist()
         invocation.return_value(None)
 

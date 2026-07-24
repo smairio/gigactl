@@ -115,3 +115,21 @@ def test_apply_disabled_only_disables():
         (mailbox.FBUF, kb.ENABLE_OFF),
         (mailbox.FCMD, kb.DOORBELL_ENABLE),
     ]
+
+
+def test_record_colour_sets_fields_and_enables():
+    s = kb.KeyboardState(enabled=False)
+    s.record_colour(255, 128, 0)
+    assert (s.r, s.g, s.b, s.enabled) == (255, 128, 0, True)  # a colour turns it on
+
+
+def test_record_brightness_sets_and_enables():
+    s = kb.KeyboardState(enabled=False, brightness_pct=10)
+    s.record_brightness(90)
+    assert (s.brightness_pct, s.enabled) == (90, True)
+
+
+def test_record_enabled_tracks_on_off():
+    s = kb.KeyboardState()
+    s.record_enabled(False)
+    assert s.enabled is False
