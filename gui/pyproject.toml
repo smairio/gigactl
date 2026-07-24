@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gigactl-gui"
+version = "0.1.0"
+description = "GigaControl — GTK4/libadwaita desktop GUI for gigactl (Gigabyte G5/G6 fan + keyboard control)"
+requires-python = ">=3.10"
+# Runtime dependency is PyGObject + GTK4/libadwaita introspection (system
+# packages python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1); not pip-installed here —
+# the .deb (ticket #22) depends on the distro packages.
+
+[project.scripts]
+gigactl-gui = "gigactl_gui.__main__:main"
+
+[tool.setuptools]
+packages = ["gigactl_gui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
