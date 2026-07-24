@@ -210,11 +210,12 @@ class Daemon:
             return _keyboard_variant(self.keyboard)
         return None
 
-    def _notify_properties(self, **changed) -> None:
+    def _notify_properties(self, **changed: GLib.Variant) -> None:
         """Emit ``PropertiesChanged`` so a running GUI or tray reflects state it
-        did not set itself — another client, a boot restore, or a manual duty
-        override flipping the profile. Best-effort: a failed emit must never
-        break the call that triggered it."""
+        did not set itself — another client, or a manual duty override flipping
+        the profile to 'manual'. (The boot restore needs no emit: it runs before
+        the bus name is acquired, so nobody is listening yet.) Best-effort: a
+        failed emit must never break the call that triggered it."""
         if self._conn is None:
             return
         try:

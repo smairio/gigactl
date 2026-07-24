@@ -30,6 +30,7 @@ _CSS = """
 .rpm-value { font-size: 20px; font-weight: 800; font-feature-settings: "tnum"; }
 .eyebrow { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.55; }
 .metric-sub { font-size: 12px; opacity: 0.6; }
+.row-label { font-size: 13.5px; font-weight: 600; }
 .sec { font-size: 16px; font-weight: 800; }
 
 /* Fan-profile row: the active profile fills with accent; Firmware fills

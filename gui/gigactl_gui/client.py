@@ -23,8 +23,6 @@ BUS_NAME = "io.github.smairio.gigactl"
 OBJECT_PATH = "/io/github/smairio/gigactl"
 INTERFACE = "io.github.smairio.gigactl.Control"
 
-_NO_DAEMON = "The gigactl daemon is not running."
-
 
 @dataclass(frozen=True)
 class Telemetry:
@@ -115,28 +113,30 @@ class DaemonClient:
     def available(self) -> bool:
         return bool(self._proxy and self._proxy.get_name_owner())
 
+    def _safe(self, what: str, callback, *args) -> None:
+        """Every callback below is reached from the GLib dispatcher, where an
+        escaping exception would take the loop down with it."""
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception as exc:
+            print(f"gigactl-gui: {what} handler failed: {exc}", flush=True)
+
     def _notify_availability(self) -> None:
-        if self._on_availability:
-            self._on_availability(self.available)
+        self._safe("availability", self._on_availability, self.available)
 
     def _notify_state(self) -> None:
-        if self._on_state:
-            self._on_state()
+        self._safe("state", self._on_state)
 
     def _on_properties_changed(self, _proxy, _changed, _invalidated) -> None:
         self._notify_state()
 
     # --- reading current state ----------------------------------------------
     def active_profile(self) -> str | None:
-        return self._cached_string("ActiveProfile")
-
-    def daemon_version(self) -> str | None:
-        return self._cached_string("DaemonVersion")
-
-    def _cached_string(self, prop: str) -> str | None:
         if not self._proxy:
             return None
-        v = self._proxy.get_cached_property(prop)
+        v = self._proxy.get_cached_property("ActiveProfile")
         return v.get_string() if v is not None else None
 
     def keyboard_state(self) -> KeyboardSnapshot | None:
@@ -171,7 +171,7 @@ class DaemonClient:
         """Fire and forget; failures arrive on ``on_error``. Asynchronous so the
         daemon's fan write-verification never blocks the UI."""
         if not self.available:
-            self._report(_NO_DAEMON)
+            self._report(errors.NO_DAEMON)
             return
         self._proxy.call(method, params, Gio.DBusCallFlags.NONE, -1, None,
                          self._on_call_done, method)
@@ -192,11 +192,10 @@ class DaemonClient:
             print(f"gigactl-gui: {message}", flush=True)
 
     def _on_signal(self, _proxy, _sender, signal_name, params) -> None:
-        # Runs on the GLib loop — never let an exception escape into the
-        # dispatcher; a malformed emit would otherwise crash it.
-        if signal_name != "Telemetry" or not self._on_telemetry:
+        if signal_name != "Telemetry":
             return
-        try:
+        self._safe("telemetry", self._deliver_telemetry, params)
+
+    def _deliver_telemetry(self, params) -> None:
+        if self._on_telemetry:
             self._on_telemetry(Telemetry.from_tuple(params.unpack()))
-        except Exception as exc:
-            print(f"gigactl-gui: bad telemetry signal: {exc}", flush=True)

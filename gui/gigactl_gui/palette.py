@@ -36,8 +36,3 @@ def name_for(rgb: RGB) -> str | None:
         if value == target:
             return name
     return None
-
-
-def hex_of(rgb: RGB) -> str:
-    r, g, b = (int(c) for c in rgb)
-    return f"#{r:02x}{g:02x}{b:02x}"

@@ -2,16 +2,21 @@
 
 DESIGN.md: "The keyboard preview glows in the real selected color — a literal
 depiction of the physical backlight." So it is literal: the keys carry the exact
-RGB the daemon was given, dimmed by the real brightness, and dark when the
-backlight is off.
+RGB the daemon was given, dimmed by the real brightness, dark when the backlight
+is off, and *unlit with no colour at all* until the daemon has actually told us
+what the backlight is doing (the hero shows "—" for the same reason).
 """
 from __future__ import annotations
+
+import math
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk  # noqa: E402
+
+from .backlight import intensity  # noqa: E402
 
 _WIDTH = 268
 _HEIGHT = 116
@@ -21,16 +26,7 @@ _PAD = 14
 _GAP = 3.0
 
 
-def intensity(enabled: bool, brightness_pct: int) -> float:
-    """0.0–1.0 glow strength. Off means dark, and so does 0 % — no flattering
-    floor, because the point of the preview is to match the hardware."""
-    if not enabled:
-        return 0.0
-    return max(0, min(100, int(brightness_pct))) / 100
-
-
 def _rounded(cr, x: float, y: float, w: float, h: float, r: float) -> None:
-    import math
     cr.new_sub_path()
     cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
     cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
@@ -44,8 +40,9 @@ class KeyboardPreview(Adw.Bin):
 
     def __init__(self) -> None:
         super().__init__()
-        self._rgb = (0, 0, 255)
-        self._glow = 1.0
+        self._rgb = (0, 0, 0)
+        self._glow = 0.0
+        self._known = False  # nothing claimed until the daemon reports
 
         area = Gtk.DrawingArea()
         area.set_content_width(_WIDTH)
@@ -55,19 +52,20 @@ class KeyboardPreview(Adw.Bin):
         self.set_child(area)
 
         self.set_accessible_role(Gtk.AccessibleRole.IMG)
-        self.update((0, 0, 255), enabled=True, brightness_pct=100)
+        self.set_tooltip_text("Keyboard backlight preview — waiting for the daemon")
 
     def update(self, rgb: tuple[int, int, int], *, enabled: bool,
                brightness_pct: int) -> None:
         self._rgb = tuple(max(0, min(255, int(c))) for c in rgb)
         self._glow = intensity(enabled, brightness_pct)
+        self._known = True
         state = "off" if self._glow == 0 else f"{int(self._glow * 100)}%"
         self.set_tooltip_text(f"Keyboard backlight preview — {state}")
         self._area.queue_draw()
 
     def _draw(self, _area, cr, width, height, *_data) -> None:
         r, g, b = (c / 255 for c in self._rgb)
-        glow = self._glow
+        glow = self._glow if self._known else 0.0
         dark = Adw.StyleManager.get_default().get_dark()
 
         # the keyboard plate

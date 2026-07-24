@@ -11,6 +11,10 @@ from __future__ import annotations
 
 _GENERIC = "That did not work."
 
+# The one place this sentence is written; the client reports it directly when it
+# can see there is no daemon to call in the first place.
+NO_DAEMON = "The gigactl daemon is not running."
+
 # Matched against the error *name*, longest-specific first.
 _MESSAGES: tuple[tuple[str, str], ...] = (
     ("WriteRejected",
@@ -19,10 +23,8 @@ _MESSAGES: tuple[tuple[str, str], ...] = (
      "You are not allowed to change this. Log in as an administrator."),
     ("InvalidArgs",
      "That value is out of range."),
-    ("ServiceUnknown",
-     "The gigactl daemon is not running."),
-    ("NameHasNoOwner",
-     "The gigactl daemon is not running."),
+    ("ServiceUnknown", NO_DAEMON),
+    ("NameHasNoOwner", NO_DAEMON),
     ("NoReply",
      "The gigactl daemon did not answer. Try again."),
     ("UnknownMethod",

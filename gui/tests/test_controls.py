@@ -32,11 +32,6 @@ def test_blue_matches_the_daemon_default():
     assert palette.name_for((0, 0, 255)) == "Blue"
 
 
-def test_hex_of_formats_for_css():
-    assert palette.hex_of((255, 0, 0)) == "#ff0000"
-    assert palette.hex_of((0, 0, 255)) == "#0000ff"
-
-
 # --- profiles ----------------------------------------------------------------
 
 def test_selectable_profiles_are_in_design_order():

@@ -17,6 +17,8 @@ Two rules the wiring depends on:
 """
 from __future__ import annotations
 
+import math
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -38,6 +40,10 @@ def _rpm(value: int) -> str:
     # Group thousands with a narrow no-break space (U+202F) so it reads "4 637"
     # and never wraps mid-value.
     return f"{value:,}".replace(",", " ")
+
+
+def _rgb_from_rgba(rgba: Gdk.RGBA) -> tuple[int, int, int]:
+    return (round(rgba.red * 255), round(rgba.green * 255), round(rgba.blue * 255))
 
 
 def _section_title(text: str) -> Gtk.Label:
@@ -62,6 +68,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         # cache when the daemon goes away, so without this a failed click would
         # leave the row showing a profile that never took effect.
         self._last_profile: str | None = None
+        self._resync_source = 0
         self._controls: list[Gtk.Widget] = []
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
@@ -93,7 +100,16 @@ class OverviewWindow(Adw.ApplicationWindow):
                                     on_state=self._sync_from_daemon,
                                     on_error=self._show_error)
         self._update_sensitivity()
+        self.connect("close-request", self._on_close)
         self._client.start()
+
+    def _on_close(self, _window) -> bool:
+        """Drop pending timers: both would touch widgets after teardown."""
+        for source in (self._brightness_source, self._resync_source):
+            if source:
+                GLib.source_remove(source)
+        self._brightness_source = self._resync_source = 0
+        return False  # let the close proceed
 
     # --- construction --------------------------------------------------------
     def _build_banner(self, model: Model) -> Gtk.Box:
@@ -215,10 +231,15 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._switch.connect("notify::active", self._on_switch_toggled)
         self._controls.append(self._switch)
 
+        # Colour is never the only signal (DESIGN.md a11y): name it in words,
+        # mirroring the profile row's "Now:".
+        self._colour_label = Gtk.Label(xalign=1.0, hexpand=True,
+                                       halign=Gtk.Align.END)
+        self._colour_label.add_css_class("metric-sub")
+
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         header.append(_section_title("Keyboard light"))
-        spacer = Gtk.Box(hexpand=True)
-        header.append(spacer)
+        header.append(self._colour_label)
         header.append(self._switch)
 
         swatch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -237,14 +258,15 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._controls.append(self._color_button)
         swatch_row.append(self._color_button)
 
-        brightness_label = Gtk.Label(label="BRIGHTNESS", xalign=0.0)
-        brightness_label.add_css_class("eyebrow")
+        brightness_label = Gtk.Label(label="Brightness", xalign=0.0)
+        brightness_label.add_css_class("row-label")
         self._brightness = Gtk.Scale.new_with_range(
             Gtk.Orientation.HORIZONTAL, 0, 100, 5)
-        self._brightness.set_draw_value(True)
+        # No number until the daemon tells us one, so the slider never claims a
+        # brightness we have not been told about (the hero shows "-" likewise).
+        self._brightness.set_draw_value(False)
         self._brightness.set_value_pos(Gtk.PositionType.RIGHT)
         self._brightness.set_hexpand(True)
-        self._brightness.set_value(100)
         self._brightness.connect("value-changed", self._on_brightness_changed)
         self._controls.append(self._brightness)
 
@@ -286,7 +308,7 @@ class OverviewWindow(Adw.ApplicationWindow):
     def _draw_swatch(_area, cr, width, height, rgb) -> None:
         r, g, b = (c / 255 for c in rgb)
         cr.set_source_rgb(r, g, b)
-        cr.arc(width / 2, height / 2, min(width, height) / 2 - 1, 0, 6.2832)
+        cr.arc(width / 2, height / 2, min(width, height) / 2 - 1, 0, math.tau)
         cr.fill()
 
     # --- control handlers ----------------------------------------------------
@@ -309,12 +331,17 @@ class OverviewWindow(Adw.ApplicationWindow):
     def _on_custom_colour(self, button: Gtk.ColorDialogButton, _param) -> None:
         if self._syncing:
             return
-        c = button.get_rgba()
-        self._apply_colour((round(c.red * 255), round(c.green * 255),
-                            round(c.blue * 255)))
+        self._apply_colour(_rgb_from_rgba(button.get_rgba()))
 
     def _apply_colour(self, rgb: palette.RGB) -> None:
         self._client.set_keyboard_color(*rgb)
+        # Setting a colour also turns the backlight on daemon-side, so show that
+        # here too instead of leaving the preview dark for a round-trip.
+        was_syncing, self._syncing = self._syncing, True
+        try:
+            self._switch.set_active(True)
+        finally:
+            self._syncing = was_syncing
         # echo immediately; the daemon's property broadcast is what finally
         # decides, so a refused write self-corrects.
         self._select_swatch(rgb)
@@ -365,6 +392,7 @@ class OverviewWindow(Adw.ApplicationWindow):
                     # don't yank the slider out from under a drag that has not
                     # reached the daemon yet
                     self._brightness.set_value(keyboard.brightness_pct)
+                    self._brightness.set_draw_value(True)  # now it is real
                 self._select_swatch(keyboard.rgb)
                 self._preview.update(keyboard.rgb, enabled=keyboard.enabled,
                                      brightness_pct=keyboard.brightness_pct)
@@ -373,11 +401,19 @@ class OverviewWindow(Adw.ApplicationWindow):
 
     def _select_swatch(self, rgb: palette.RGB) -> None:
         match = palette.name_for(rgb)
+        self._colour_label.set_text(match or "Custom colour")
         for button, value in self._swatches:
-            if value == tuple(rgb) and match:
+            chosen = bool(match) and value == tuple(rgb)
+            if chosen:
                 button.add_css_class("selected")
             else:
                 button.remove_css_class("selected")
+            # The outline is decoration; this is what a screen reader reads —
+            # PRESSED mirrors the mockup's aria-pressed on the active swatch.
+            # The value must be a plain int: GTK reads it with g_value_get_int,
+            # so a bool or the bare enum is rejected at runtime.
+            button.update_state([Gtk.AccessibleState.PRESSED], [int(
+                Gtk.AccessibleTristate.TRUE if chosen else Gtk.AccessibleTristate.FALSE)])
         was_syncing = self._syncing
         self._syncing = True  # setting rgba re-enters _on_custom_colour
         try:
@@ -391,8 +427,7 @@ class OverviewWindow(Adw.ApplicationWindow):
     def _echo_preview(self, rgb: palette.RGB | None = None) -> None:
         """Repaint the preview from what the widgets currently show."""
         if rgb is None:
-            c = self._color_button.get_rgba()
-            rgb = (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
+            rgb = _rgb_from_rgba(self._color_button.get_rgba())
         self._preview.update(rgb, enabled=self._switch.get_active(),
                              brightness_pct=int(self._brightness.get_value()))
 
@@ -416,7 +451,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         """Controls need a daemon to talk to, and an unsupported machine must
         not be written to at all (DESIGN.md / PRODUCT.md safety invariants)."""
         supported = self._model.support is not Support.UNSUPPORTED
-        usable = supported and self._client.available if hasattr(self, "_client") else False
+        usable = supported and self._client.available
         for widget in self._controls:
             widget.set_sensitive(usable)
 
@@ -424,12 +459,16 @@ class OverviewWindow(Adw.ApplicationWindow):
         """A refused or rejected write surfaces inline, never silently — and the
         controls snap back, so a failed click never leaves a button claiming
         something the daemon did not do."""
-        self._toasts.add_toast(Adw.Toast(title=message, timeout=6))
+        # timeout=0: a write that was refused and auto-reverted is not a
+        # transient nicety, so the notice stays until it is dismissed.
+        self._toasts.add_toast(Adw.Toast(title=message, timeout=0))
         # Deferred: correcting a grouped ToggleButton from inside its own
         # "toggled" emission does not stick, so resync once GTK is done.
-        GLib.idle_add(self._resync)
+        if self._resync_source == 0:
+            self._resync_source = GLib.idle_add(self._resync)
 
     def _resync(self) -> bool:
+        self._resync_source = 0
         self._sync_from_daemon()
         return GLib.SOURCE_REMOVE
 

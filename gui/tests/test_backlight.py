@@ -1,5 +1,5 @@
-"""The keyboard preview's pure part: how brightly it should glow."""
-from gigactl_gui.preview import intensity
+"""How brightly the preview should glow — pure, no GTK import needed."""
+from gigactl_gui.backlight import intensity
 
 
 def test_disabled_backlight_does_not_glow():
