@@ -68,9 +68,28 @@ def test_invalid_fan_rejected():
         fans.set_duty(ec, fan=3, pct=50)
 
 
-def test_duty_accepted_tolerates_ramp():
-    # the EC ramps toward target; "accepted" means observed is at/above a margin
-    # below target (it may still be climbing), not exact equality
-    assert fans.duty_accepted(target_raw=178, observed_raw=178) is True
-    assert fans.duty_accepted(target_raw=178, observed_raw=170) is True   # within tol
-    assert fans.duty_accepted(target_raw=178, observed_raw=64) is False   # untouched/firmware
+def test_expand_maps_selector_to_real_fans():
+    assert fans.expand(fans.BOTH_FANS) == (fans.CPU_FAN, fans.GPU_FAN)
+    assert fans.expand(1) == (1,)
+    assert fans.expand(2) == (2,)
+
+
+def test_expand_rejects_bad_selector():
+    for bad in (3, -1, 99):
+        with pytest.raises(ValueError):
+            fans.expand(bad)
+
+
+def test_read_duty_reads_the_right_register():
+    ec = RecordingEc({0xCE: 180, 0xCF: 64})
+    assert fans.read_duty(ec, 1) == 180
+    assert fans.read_duty(ec, 2) == 64
+
+
+def test_duty_matches_is_symmetric():
+    assert fans.duty_matches(target_raw=178, observed_raw=178) is True
+    assert fans.duty_matches(target_raw=178, observed_raw=170) is True   # within tol
+    assert fans.duty_matches(target_raw=178, observed_raw=64) is False   # rejected, held high
+    # the bug the review caught: a rejected DOWNWARD write (target low, EC holds
+    # the fan high) must read as NOT matched
+    assert fans.duty_matches(target_raw=26, observed_raw=160) is False

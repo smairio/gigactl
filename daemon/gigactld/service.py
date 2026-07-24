@@ -128,8 +128,10 @@ class Daemon:
 
     def _set_fan_duty(self, sender, params, invocation) -> None:
         fan, percent = params.unpack()
-        if fan not in (fans.BOTH_FANS, fans.CPU_FAN, fans.GPU_FAN):
-            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad fan {fan}")
+        try:
+            targets = fans.expand(fan)
+        except ValueError as exc:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", str(exc))
             return
         if not 0 <= percent <= 100:
             invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad percent {percent}")
@@ -137,37 +139,40 @@ class Daemon:
         if not self._authorized(sender, invocation):
             return
 
-        targets = fans._REAL_FANS if fan == fans.BOTH_FANS else (fan,)
         target_raw = fans.pct_to_raw(percent)
         for f in targets:
             fans.set_duty(self.ec, f, percent)
-        for f in targets:
-            if not self._verify_or_revert(f, target_raw):
-                invocation.return_dbus_error(
-                    f"{_ERR}.WriteRejected",
-                    f"fan {f} did not accept the duty; reverted to firmware auto")
-                return
+        rejected = self._verify(targets, target_raw)
+        if rejected:
+            # any rejection reverts EVERY fan we touched, not just the bad one,
+            # so a partial failure can't strand a sibling in manual mode.
+            for f in targets:
+                fans.restore_auto(self.ec, f)
+            invocation.return_dbus_error(
+                f"{_ERR}.WriteRejected",
+                f"fan(s) {rejected} did not accept the duty; all reverted to firmware auto")
+            return
         invocation.return_value(None)
 
     def _restore_firmware(self, sender, invocation) -> None:
         if not self._authorized(sender, invocation):
             return
-        for f in fans._REAL_FANS:
+        for f in fans.FANS:
             fans.restore_auto(self.ec, f)
         invocation.return_value(None)
 
-    def _verify_or_revert(self, fan: int, target_raw: int) -> bool:
-        """Poll the duty readback briefly; if the EC never took the write,
-        hand the fan back to firmware and report failure."""
-        reg = fans.DUTY_REG[fan]
-        for _ in range(6):  # ~1.5s; the EC ramps, it doesn't snap
-            time.sleep(0.25)
-            with self.ec.transaction():
-                observed = self.ec.read_u8(reg)
-            if fans.duty_accepted(target_raw, observed):
-                return True
-        fans.restore_auto(self.ec, fan)
-        return False
+    def _verify(self, targets, target_raw: int) -> list:
+        """Return the fans that never took the write. The duty register snaps
+        to the commanded value, so a short settle suffices — no long ramp poll,
+        keeping the main loop responsive."""
+        rejected = list(targets)
+        for _ in range(3):  # ~0.6s total, shared across all fans
+            time.sleep(0.2)
+            rejected = [f for f in rejected
+                        if not fans.duty_matches(target_raw, fans.read_duty(self.ec, f))]
+            if not rejected:
+                return []
+        return rejected
 
     # --- telemetry loop ------------------------------------------------------
     def _tick(self) -> bool:
