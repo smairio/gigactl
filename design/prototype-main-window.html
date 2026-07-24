@@ -1,0 +1,484 @@
+<!doctype html>
+<!--
+  gigactl — main window PROTOTYPE (throwaway). Three radically different layouts of the
+  same libadwaita app window, switchable via ?variant=A|B|C or the floating bar / arrow keys.
+  Built as HTML to iterate fast; the winner is re-implemented in GTK4/libadwaita.
+  A = Stacked dashboard · B = Split cockpit · C = Sidebar app-shell.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gigactl — prototype</title>
+<style>
+  :root{
+    /* libadwaita-ish light */
+    --bg:#f6f5f4; --window:#faf9f8; --card:#ffffff; --card-2:#fbfbfa;
+    --hd:#ebebea; --hd-border:#dcdcdc;
+    --ink:#1d1d1f; --ink-2:#5e5c64; --ink-3:#8a878f;
+    --line:#e0dfde; --line-2:#ecebea;
+    --accent:#3584e4; --accent-ink:#1c71d8;
+    --cool:#26a269; --warm:#e5a50a; --hot:#e01b24; --hot-deep:#c01c28;
+    --shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.08);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.07);
+    --r:13px; --r-sm:9px;
+    --kbd:#1f6fe5;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#1c1c1e; --window:#242427; --card:#303034; --card-2:#2a2a2d;
+      --hd:#303034; --hd-border:#1b1b1d;
+      --ink:#ffffff; --ink-2:#c6c4c9; --ink-3:#918f97;
+      --line:#3a3a3e; --line-2:#333337;
+      --accent:#78aeed; --accent-ink:#78aeed;
+      --cool:#4dd48a; --warm:#f5c211; --hot:#ff6b6b; --hot-deep:#ff7b7b;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.45);
+      --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1c1c1e; --window:#242427; --card:#303034; --card-2:#2a2a2d;
+    --hd:#303034; --hd-border:#1b1b1d; --ink:#fff; --ink-2:#c6c4c9; --ink-3:#918f97;
+    --line:#3a3a3e; --line-2:#333337; --accent:#78aeed; --accent-ink:#78aeed;
+    --cool:#4dd48a; --warm:#f5c211; --hot:#ff6b6b; --hot-deep:#ff7b7b;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.45); --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f5f4; --window:#faf9f8; --card:#fff; --card-2:#fbfbfa; --hd:#ebebea; --hd-border:#dcdcdc;
+    --ink:#1d1d1f; --ink-2:#5e5c64; --ink-3:#8a878f; --line:#e0dfde; --line-2:#ecebea;
+    --accent:#3584e4; --accent-ink:#1c71d8; --cool:#26a269; --warm:#e5a50a; --hot:#e01b24; --hot-deep:#c01c28;
+    --shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.08); --shadow-sm:0 1px 2px rgba(0,0,0,.07);
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Inter","Adwaita Sans",system-ui,-apple-system,"Cantarell",sans-serif;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb,var(--accent) 8%, transparent), transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    display:flex;align-items:center;justify-content:center;
+    padding:34px 20px 96px;letter-spacing:-.01em;
+  }
+  .stage{width:100%;max-width:940px}
+
+  /* ---- window chrome ---- */
+  .win{
+    background:var(--window);border-radius:var(--r);box-shadow:var(--shadow);
+    overflow:hidden;border:1px solid var(--hd-border);
+  }
+  .titlebar{
+    height:47px;background:var(--hd);border-bottom:1px solid var(--hd-border);
+    display:flex;align-items:center;gap:10px;padding:0 14px;position:relative;
+  }
+  .traffic{display:flex;gap:8px}
+  .traffic i{width:12px;height:12px;border-radius:50%;display:block}
+  .traffic .m{background:#ffbd2e}.traffic .x{background:#ff5f57}.traffic .z{background:#28c840}
+  .tt{position:absolute;left:0;right:0;text-align:center;font-size:13px;font-weight:700;color:var(--ink-2);pointer-events:none}
+  .hd-actions{margin-left:auto;display:flex;gap:6px;z-index:1}
+  .icobtn{width:30px;height:30px;border-radius:8px;border:0;background:transparent;color:var(--ink-2);
+    display:grid;place-items:center;cursor:pointer;font-size:15px}
+  .icobtn:hover{background:color-mix(in srgb,var(--ink) 10%,transparent)}
+
+  /* ---- shared atoms ---- */
+  .body{padding:22px}
+  .eyebrow{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-sm)}
+  .muted{color:var(--ink-2)}
+  .divider{height:1px;background:var(--line-2)}
+
+  /* temperature gauge (semantic ring, not a decorative sparkline) */
+  .gauge{position:relative;width:132px;height:132px;flex:none}
+  .gauge svg{transform:rotate(-90deg)}
+  .gauge .val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .gauge .num{font-size:34px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+  .gauge .deg{font-size:15px;font-weight:700;color:var(--ink-2)}
+  .gauge .lbl{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-top:5px}
+
+  /* profile segmented control */
+  .profiles{display:flex;gap:8px}
+  .profiles.wrap{flex-wrap:wrap}
+  .prof{
+    flex:1;min-width:0;border:1px solid var(--line);background:var(--card);border-radius:11px;
+    padding:13px 10px 11px;cursor:pointer;text-align:center;transition:.16s cubic-bezier(.2,.7,.3,1);
+    display:flex;flex-direction:column;align-items:center;gap:7px;color:var(--ink)
+  }
+  .prof:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .prof .g{font-size:20px;line-height:1}
+  .prof .n{font-size:12.5px;font-weight:700}
+  .prof .d{font-size:10.5px;color:var(--ink-3)}
+  .prof[aria-pressed="true"]{
+    border-color:transparent;color:#fff;
+    background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 92%,#fff),var(--accent));
+    box-shadow:0 6px 16px -4px color-mix(in srgb,var(--accent) 60%,transparent)
+  }
+  .prof[aria-pressed="true"] .d{color:rgba(255,255,255,.82)}
+  .prof.firm[aria-pressed="true"]{background:linear-gradient(180deg,#6b7280,#4b5563);box-shadow:0 6px 16px -4px rgba(75,85,99,.5)}
+
+  /* keyboard preview */
+  .kbprev{border-radius:10px;padding:14px;background:#111216;position:relative;overflow:hidden}
+  .kbglow{position:absolute;inset:0;opacity:.9;background:
+    radial-gradient(120% 140% at 50% 130%, color-mix(in srgb, var(--kbd) 70%, transparent), transparent 70%)}
+  .keys{position:relative;display:grid;grid-template-columns:repeat(14,1fr);gap:4px}
+  .keys i{height:15px;border-radius:3px;background:#2a2c33;box-shadow:0 0 8px -1px var(--kbd), inset 0 0 0 1px color-mix(in srgb,var(--kbd) 50%,#2a2c33)}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .sw{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;box-shadow:var(--shadow-sm)}
+  .sw[aria-pressed="true"]{border-color:var(--ink);outline:2px solid var(--card);outline-offset:-4px}
+
+  .slider{height:7px;border-radius:99px;background:var(--line);position:relative}
+  .slider .fill{position:absolute;inset:0 auto 0 0;border-radius:99px;background:var(--accent)}
+  .slider .knob{position:absolute;top:50%;width:17px;height:17px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,.35);transform:translate(-50%,-50%);border:1px solid rgba(0,0,0,.08)}
+
+  .rpmline{display:flex;align-items:baseline;gap:6px}
+  .rpm{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+  .unit{font-size:11px;font-weight:700;color:var(--ink-3)}
+
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+    padding:4px 10px;border-radius:99px;background:color-mix(in srgb,var(--warm) 16%,transparent);color:var(--warm)}
+  .pill.ok{background:color-mix(in srgb,var(--cool) 16%,transparent);color:var(--cool)}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 25%,transparent)}
+
+  h2.sec{font-size:16px;font-weight:800;letter-spacing:-.02em}
+  .row-lbl{font-size:13.5px;font-weight:600}
+
+  /* curve mini graph */
+  .curve{width:100%;height:100%;display:block}
+  .curvebox{background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:12px}
+
+  /* ===== Variant A : stacked dashboard ===== */
+  .a-hero{display:flex;gap:26px;align-items:center;padding:6px 6px 22px}
+  .a-gauges{display:flex;gap:18px}
+  .a-side{flex:1;min-width:0}
+  .a-fans{display:flex;gap:22px;margin-top:14px}
+  .a-fan{flex:1}
+  .a-kb{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:center}
+
+  /* ===== Variant B : split cockpit ===== */
+  .b-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
+  .b-statusbar{display:flex;gap:10px;margin-bottom:16px}
+  .b-stat{flex:1;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;gap:12px}
+  .b-stat .mini{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;font-weight:800;font-size:13px;color:#fff;font-variant-numeric:tabular-nums}
+  .b-stat .t{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3)}
+  .b-stat .v{font-size:15px;font-weight:700}
+  .panel{padding:18px}
+  .panel h2{margin-bottom:14px}
+
+  /* ===== Variant C : sidebar shell ===== */
+  .c-shell{display:grid;grid-template-columns:210px 1fr;min-height:520px}
+  .c-nav{background:var(--card-2);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:3px}
+  .c-brand{display:flex;align-items:center;gap:10px;padding:8px 10px 16px}
+  .c-brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 40%,#7a3ff2));display:grid;place-items:center;color:#fff;font-weight:900;font-size:15px}
+  .c-brand b{font-size:14px}
+  .navitem{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink-2);cursor:pointer}
+  .navitem .i{font-size:15px;width:18px;text-align:center}
+  .navitem:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+  .navitem[aria-current="true"]{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent-ink)}
+  .c-foot{margin-top:auto;padding:10px}
+  .c-status{border-radius:9px;padding:10px 12px;background:color-mix(in srgb,var(--warm) 12%,transparent);font-size:11.5px;font-weight:600;color:var(--warm)}
+  .c-main{padding:22px 24px}
+  .c-metrics{display:flex;gap:14px;margin:6px 0 22px}
+  .c-metric{flex:1;border:1px solid var(--line);border-radius:11px;padding:15px;background:var(--card)}
+  .c-metric .top{display:flex;align-items:center;justify-content:space-between}
+  .c-metric .k{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3)}
+  .c-metric .big{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:8px}
+  .bar{height:6px;border-radius:99px;background:var(--line-2);margin-top:12px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:99px}
+
+  .hidden{display:none !important}
+
+  /* ---- switcher ---- */
+  .switch{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:50;
+    display:flex;align-items:center;gap:4px;background:rgba(20,20,22,.92);color:#fff;
+    border-radius:99px;padding:6px 8px;box-shadow:0 10px 30px rgba(0,0,0,.4);backdrop-filter:blur(8px);
+    font-family:inherit}
+  .switch button{background:transparent;border:0;color:#fff;cursor:pointer;font-size:16px;width:34px;height:34px;border-radius:50%}
+  .switch button:hover{background:rgba(255,255,255,.14)}
+  .switch .lab{font-size:12.5px;font-weight:700;padding:0 10px;min-width:190px;text-align:center;white-space:nowrap}
+  .switch .lab small{display:block;font-weight:500;color:rgba(255,255,255,.6);font-size:10.5px;letter-spacing:.02em}
+  .switch .theme{margin-left:4px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ============ VARIANT A — STACKED DASHBOARD ============ -->
+  <section class="win" data-variant="A">
+    <div class="titlebar">
+      <div class="traffic"><i class="x"></i><i class="m"></i><i class="z"></i></div>
+      <div class="tt">gigactl</div>
+      <div class="hd-actions"><button class="icobtn" title="Settings">⚙</button><button class="icobtn" title="About">☰</button></div>
+    </div>
+    <div class="body">
+      <!-- hero: live state -->
+      <div class="a-hero">
+        <div class="a-gauges">
+          <div class="gauge" data-gauge="91"><div class="val"><div class="num" style="color:var(--hot)">91<span class="deg">°</span></div></div><div class="lbl" style="position:absolute;bottom:8px;left:0;right:0">CPU</div></div>
+          <div class="gauge" data-gauge="73"><div class="val"><div class="num" style="color:var(--warm)">73<span class="deg">°</span></div></div><div class="lbl" style="position:absolute;bottom:8px;left:0;right:0">GPU</div></div>
+        </div>
+        <div class="a-side">
+          <span class="pill"><span class="dot"></span>Running hot — firmware curve is lazy</span>
+          <div class="a-fans">
+            <div class="a-fan">
+              <div class="eyebrow">CPU fan</div>
+              <div class="rpmline"><span class="rpm">2 486</span><span class="unit">rpm</span></div>
+              <div class="muted" style="font-size:12px">27% duty</div>
+            </div>
+            <div class="a-fan">
+              <div class="eyebrow">GPU fan</div>
+              <div class="rpmline"><span class="rpm">2 411</span><span class="unit">rpm</span></div>
+              <div class="muted" style="font-size:12px">27% duty</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- one-click profiles -->
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin:2px 0 12px">
+        <h2 class="sec">Fan profile</h2>
+        <span class="muted" style="font-size:12.5px">Now: <b>Firmware</b></span>
+      </div>
+      <div class="profiles wrap" style="margin-bottom:8px">
+        <button class="prof" aria-pressed="false"><span class="g">🍃</span><span class="n">Quiet</span><span class="d">low noise</span></button>
+        <button class="prof" aria-pressed="true"><span class="g">⚖️</span><span class="n">Balanced</span><span class="d">recommended</span></button>
+        <button class="prof" aria-pressed="false"><span class="g">🔥</span><span class="n">Performance</span><span class="d">cooler</span></button>
+        <button class="prof" aria-pressed="false"><span class="g">🚀</span><span class="n">Max</span><span class="d">100%</span></button>
+        <button class="prof firm" aria-pressed="false"><span class="g">🖥️</span><span class="n">Firmware</span><span class="d">automatic</span></button>
+        <button class="prof" aria-pressed="false"><span class="g">✏️</span><span class="n">Custom…</span><span class="d">edit curve</span></button>
+      </div>
+
+      <div class="divider" style="margin:18px 0"></div>
+
+      <!-- keyboard -->
+      <div class="a-kb">
+        <div>
+          <h2 class="sec" style="margin-bottom:12px">Keyboard light</h2>
+          <div class="swatches" style="margin-bottom:14px">
+            <span class="sw" style="background:#1f6fe5" aria-pressed="true" title="Blue"></span>
+            <span class="sw" style="background:#e01b24" title="Red"></span>
+            <span class="sw" style="background:#26a269" title="Green"></span>
+            <span class="sw" style="background:#f5c211" title="Yellow"></span>
+            <span class="sw" style="background:#9141ac" title="Purple"></span>
+            <span class="sw" style="background:#ffffff" title="White"></span>
+            <span class="sw" style="background:conic-gradient(from 0deg,red,#ff0,lime,cyan,blue,magenta,red)" title="Custom…"></span>
+          </div>
+          <div class="row-lbl" style="margin-bottom:7px">Brightness</div>
+          <div class="slider"><div class="fill" style="right:22%"></div><div class="knob" style="left:78%"></div></div>
+        </div>
+        <div class="kbprev" style="--kbd:#1f6fe5">
+          <div class="kbglow"></div>
+          <div class="keys">
+            <script>for(let i=0;i<42;i++)document.write('<i></i>')</script>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VARIANT B — SPLIT COCKPIT ============ -->
+  <section class="win hidden" data-variant="B">
+    <div class="titlebar">
+      <div class="traffic"><i class="x"></i><i class="m"></i><i class="z"></i></div>
+      <div class="tt">gigactl</div>
+      <div class="hd-actions"><button class="icobtn">⚙</button><button class="icobtn">☰</button></div>
+    </div>
+    <div class="body">
+      <!-- persistent status bar -->
+      <div class="b-statusbar">
+        <div class="b-stat"><div class="mini" style="background:var(--hot)">91°</div><div><div class="t">CPU</div><div class="v">91 °C · throttling soon</div></div></div>
+        <div class="b-stat"><div class="mini" style="background:var(--warm)">73°</div><div><div class="t">GPU</div><div class="v">73 °C · fine</div></div></div>
+        <div class="b-stat"><div class="mini" style="background:var(--accent)">💨</div><div><div class="t">Fans</div><div class="v">2 486 / 2 411 rpm</div></div></div>
+      </div>
+
+      <div class="b-grid">
+        <!-- left: fans + curve -->
+        <div class="card panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <h2 class="sec">Fans</h2>
+            <span class="pill ok"><span class="dot"></span>Balanced</span>
+          </div>
+          <div class="profiles" style="margin-bottom:16px">
+            <button class="prof" aria-pressed="false"><span class="g">🍃</span><span class="n">Quiet</span></button>
+            <button class="prof" aria-pressed="true"><span class="g">⚖️</span><span class="n">Balanced</span></button>
+            <button class="prof" aria-pressed="false"><span class="g">🔥</span><span class="n">Perf.</span></button>
+            <button class="prof" aria-pressed="false"><span class="g">🚀</span><span class="n">Max</span></button>
+          </div>
+          <div class="curvebox">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span class="eyebrow">Curve · temp → fan speed</span>
+              <span class="muted" style="font-size:11.5px">🔗 linked</span>
+            </div>
+            <div style="height:150px">
+              <svg class="curve" viewBox="0 0 300 150" preserveAspectRatio="none">
+                <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/>
+                  <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+                <line x1="0" y1="112" x2="300" y2="112" stroke="var(--line)" stroke-width="1"/>
+                <line x1="0" y1="70" x2="300" y2="70" stroke="var(--line-2)" stroke-width="1"/>
+                <path d="M0,128 L70,120 L150,86 L215,44 L300,16 L300,150 L0,150 Z" fill="url(#cg)"/>
+                <path d="M0,128 L70,120 L150,86 L215,44 L300,16" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>
+                <g fill="var(--card)" stroke="var(--accent)" stroke-width="2.5">
+                  <circle cx="70" cy="120" r="4.5"/><circle cx="150" cy="86" r="4.5"/><circle cx="215" cy="44" r="4.5"/><circle cx="300" cy="16" r="4.5"/></g>
+                <circle cx="235" cy="38" r="5.5" fill="var(--hot)"/>
+              </svg>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-3);margin-top:4px">
+              <span>40°</span><span>60°</span><span>80°</span><span>100°</span></div>
+          </div>
+          <div style="margin-top:14px;text-align:center">
+            <button class="prof firm" aria-pressed="false" style="flex:none;display:inline-flex;flex-direction:row;gap:8px;padding:9px 16px"><span class="g" style="font-size:15px">🖥️</span><span class="n">Back to firmware auto</span></button>
+          </div>
+        </div>
+
+        <!-- right: keyboard -->
+        <div class="card panel">
+          <h2 class="sec">Keyboard</h2>
+          <div class="kbprev" style="--kbd:#1f6fe5;margin-bottom:16px">
+            <div class="kbglow"></div>
+            <div class="keys"><script>for(let i=0;i<42;i++)document.write('<i></i>')</script></div>
+          </div>
+          <div class="row-lbl" style="margin-bottom:9px">Color</div>
+          <div class="swatches" style="margin-bottom:18px">
+            <span class="sw" style="background:#1f6fe5" aria-pressed="true"></span>
+            <span class="sw" style="background:#e01b24"></span>
+            <span class="sw" style="background:#26a269"></span>
+            <span class="sw" style="background:#f5c211"></span>
+            <span class="sw" style="background:#9141ac"></span>
+            <span class="sw" style="background:#fff"></span>
+            <span class="sw" style="background:conic-gradient(from 0deg,red,#ff0,lime,cyan,blue,magenta,red)"></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:7px"><span class="row-lbl">Brightness</span><span class="muted" style="font-size:12px">78%</span></div>
+          <div class="slider" style="margin-bottom:18px"><div class="fill" style="right:22%"></div><div class="knob" style="left:78%"></div></div>
+          <div class="divider" style="margin-bottom:14px"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="row-lbl">Backlight</span>
+            <span style="width:46px;height:26px;border-radius:99px;background:var(--accent);position:relative;display:inline-block"><span style="position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:#fff"></span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VARIANT C — SIDEBAR APP SHELL ============ -->
+  <section class="win hidden" data-variant="C">
+    <div class="titlebar">
+      <div class="traffic"><i class="x"></i><i class="m"></i><i class="z"></i></div>
+      <div class="tt">gigactl</div>
+      <div class="hd-actions"><button class="icobtn">⚙</button><button class="icobtn">☰</button></div>
+    </div>
+    <div class="c-shell">
+      <nav class="c-nav">
+        <div class="c-brand"><span class="logo">g</span><b>gigactl</b></div>
+        <div class="navitem" aria-current="true"><span class="i">📊</span>Overview</div>
+        <div class="navitem"><span class="i">💨</span>Fans</div>
+        <div class="navitem"><span class="i">📈</span>Curve</div>
+        <div class="navitem"><span class="i">⌨️</span>Keyboard</div>
+        <div class="c-foot">
+          <div class="c-status">⚠ G6 KF verified · your model detected</div>
+        </div>
+      </nav>
+      <main class="c-main">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div><div class="eyebrow">Overview</div><h2 class="sec" style="font-size:19px;margin-top:2px">Your laptop right now</h2></div>
+          <span class="pill"><span class="dot"></span>Firmware auto</span>
+        </div>
+
+        <div class="c-metrics">
+          <div class="c-metric">
+            <div class="top"><span class="k">CPU temp</span><span style="color:var(--hot)">▲</span></div>
+            <div class="big" style="color:var(--hot)">91°</div>
+            <div class="bar"><i style="width:91%;background:var(--hot)"></i></div>
+          </div>
+          <div class="c-metric">
+            <div class="top"><span class="k">GPU temp</span></div>
+            <div class="big" style="color:var(--warm)">73°</div>
+            <div class="bar"><i style="width:73%;background:var(--warm)"></i></div>
+          </div>
+          <div class="c-metric">
+            <div class="top"><span class="k">CPU fan</span></div>
+            <div class="big">2 486<span style="font-size:13px;color:var(--ink-3);font-weight:700"> rpm</span></div>
+            <div class="bar"><i style="width:40%;background:var(--accent)"></i></div>
+          </div>
+          <div class="c-metric">
+            <div class="top"><span class="k">GPU fan</span></div>
+            <div class="big">2 411<span style="font-size:13px;color:var(--ink-3);font-weight:700"> rpm</span></div>
+            <div class="bar"><i style="width:39%;background:var(--accent)"></i></div>
+          </div>
+        </div>
+
+        <h2 class="sec" style="margin-bottom:12px">Quick profile</h2>
+        <div class="profiles">
+          <button class="prof" aria-pressed="false"><span class="g">🍃</span><span class="n">Quiet</span><span class="d">low noise</span></button>
+          <button class="prof" aria-pressed="true"><span class="g">⚖️</span><span class="n">Balanced</span><span class="d">recommended</span></button>
+          <button class="prof" aria-pressed="false"><span class="g">🔥</span><span class="n">Performance</span><span class="d">cooler</span></button>
+          <button class="prof" aria-pressed="false"><span class="g">🚀</span><span class="n">Max</span><span class="d">100%</span></button>
+          <button class="prof firm" aria-pressed="false"><span class="g">🖥️</span><span class="n">Firmware</span><span class="d">automatic</span></button>
+        </div>
+
+        <div class="divider" style="margin:20px 0"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:14px">
+            <div class="kbprev" style="--kbd:#1f6fe5;width:150px;padding:9px"><div class="kbglow"></div>
+              <div class="keys" style="gap:2.5px"><script>for(let i=0;i<28;i++)document.write('<i style="height:9px"></i>')</script></div></div>
+            <div><div class="row-lbl">Keyboard light</div><div class="muted" style="font-size:12.5px">Blue · 78% brightness</div></div>
+          </div>
+          <button class="prof" aria-pressed="false" style="flex:none;flex-direction:row;gap:8px;padding:9px 15px"><span class="g" style="font-size:15px">⌨️</span><span class="n">Change color</span></button>
+        </div>
+      </main>
+    </div>
+  </section>
+
+</div>
+
+<!-- floating switcher -->
+<div class="switch" role="group" aria-label="Prototype variant switcher">
+  <button id="prev" aria-label="Previous variant">‹</button>
+  <div class="lab" id="lab">A — Stacked dashboard<small>hero state · one-click profiles</small></div>
+  <button id="next" aria-label="Next variant">›</button>
+  <button class="theme" id="theme" title="Toggle light/dark">◐</button>
+</div>
+
+<script>
+  const meta={
+    A:['Stacked dashboard','hero state · one-click profiles'],
+    B:['Split cockpit','fans + curve | keyboard, side by side'],
+    C:['Sidebar app-shell','nav + metric tiles, room to grow']
+  };
+  const order=['A','B','C'];
+  function show(v){
+    document.querySelectorAll('[data-variant]').forEach(s=>s.classList.toggle('hidden',s.dataset.variant!==v));
+    document.getElementById('lab').innerHTML=v+' — '+meta[v][0]+'<small>'+meta[v][1]+'</small>';
+    const u=new URL(location);u.searchParams.set('variant',v);history.replaceState({},'',u);
+  }
+  let cur=(new URL(location).searchParams.get('variant')||'A').toUpperCase();
+  if(!order.includes(cur))cur='A';show(cur);
+  function go(d){cur=order[(order.indexOf(cur)+d+order.length)%order.length];show(cur)}
+  document.getElementById('next').onclick=()=>go(1);
+  document.getElementById('prev').onclick=()=>go(-1);
+  addEventListener('keydown',e=>{
+    if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;
+    if(e.key==='ArrowRight')go(1);if(e.key==='ArrowLeft')go(-1);
+  });
+  // gauges: draw semantic ring
+  document.querySelectorAll('[data-gauge]').forEach(g=>{
+    const t=+g.dataset.gauge, pct=Math.min(1,(t-30)/70);
+    const col=t>=90?'var(--hot)':t>=75?'var(--warm)':'var(--cool)';
+    const R=58,C=2*Math.PI*R;
+    g.insertAdjacentHTML('afterbegin',
+      `<svg width="132" height="132" viewBox="0 0 132 132">
+         <circle cx="66" cy="66" r="${R}" fill="none" stroke="var(--line)" stroke-width="9"/>
+         <circle cx="66" cy="66" r="${R}" fill="none" stroke="${col}" stroke-width="9" stroke-linecap="round"
+           stroke-dasharray="${C}" stroke-dashoffset="${C*(1-pct*.75)}" transform="rotate(135 66 66)"/>
+       </svg>`);
+  });
+  // theme toggle
+  document.getElementById('theme').onclick=()=>{
+    const r=document.documentElement;
+    const now=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+    r.setAttribute('data-theme',now==='dark'?'light':'dark');
+  };
+</script>
+</body>
+</html>
