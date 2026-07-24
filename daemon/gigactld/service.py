@@ -1,9 +1,8 @@
 """D-Bus system-bus service.
 
-For this ticket the daemon owns its well-known name and broadcasts a
-``Telemetry`` signal every poll interval. Control methods (fan/keyboard) and
-properties land in later tickets; the interface is introspectable so they slot
-in beside the signal.
+The daemon owns its well-known name, broadcasts a ``Telemetry`` signal every
+poll interval, runs the automatic fan-curve engine on that same tick, and
+exposes fan-control methods (all gated by polkit).
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
-from . import authz, fans  # noqa: E402
+from . import authz, curve, fans, state  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
 
 _ERR = "io.github.smairio.gigactl.Error"
@@ -33,6 +32,14 @@ INTROSPECTION_XML = f"""
       <arg name="percent" type="u" direction="in"/>
     </method>
     <method name="RestoreFirmware"/>
+    <method name="SetProfile">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="SetCurve">
+      <arg name="which"  type="s"     direction="in"/>
+      <arg name="points" type="a(uu)" direction="in"/>
+      <arg name="linked" type="b"     direction="in"/>
+    </method>
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
       <arg name="gpu_temp"  type="u"/>
@@ -42,6 +49,7 @@ INTROSPECTION_XML = f"""
       <arg name="fan2_duty_pct" type="u"/>
     </signal>
     <property name="DaemonVersion" type="s" access="read"/>
+    <property name="ActiveProfile" type="s" access="read"/>
   </interface>
 </node>
 """
@@ -56,6 +64,8 @@ class Daemon:
         self._conn: Gio.DBusConnection | None = None
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._loop = GLib.MainLoop()
+        self.engine = curve.ProfileEngine(hysteresis=curve.HYSTERESIS_C)
+        self.state_path = state.DEFAULT_PATH
 
     # --- lifecycle -----------------------------------------------------------
     def run(self) -> None:
@@ -74,7 +84,15 @@ class Daemon:
         self._loop.run()
 
     def _on_signal(self) -> bool:
-        print("gigactld: shutting down", flush=True)
+        # Clean-stop failsafe: hand the fans back to firmware so a stop never
+        # leaves them frozen. (Crash is covered by `gigactld --restore-firmware`
+        # in the unit's ExecStopPost.)
+        print("gigactld: shutting down; handing fans back to firmware", flush=True)
+        try:
+            for f in fans.FANS:
+                fans.restore_auto(self.ec, f)
+        except Exception as exc:
+            print(f"gigactld: firmware restore on shutdown failed: {exc}", flush=True)
         self._loop.quit()
         return GLib.SOURCE_REMOVE
 
@@ -92,8 +110,19 @@ class Daemon:
             )
         except Exception as exc:  # pragma: no cover - environment dependent
             print(f"gigactld: object registration skipped ({exc})", flush=True)
+        self._restore_saved_profile()
         GLib.timeout_add_seconds(self.interval_s, self._tick)
-        self._tick()  # emit immediately, don't wait a full interval
+        self._tick()  # emit + apply immediately, don't wait a full interval
+
+    def _restore_saved_profile(self) -> None:
+        data = state.load(self.state_path)
+        if not data:
+            return
+        try:
+            state.restore(self.engine, data)
+            print(f"gigactld: restored profile '{self.engine.profile}'", flush=True)
+        except Exception as exc:
+            print(f"gigactld: could not restore saved profile: {exc}", flush=True)
 
     def _on_name_acquired(self, conn, name: str) -> None:
         print(f"gigactld: owning {name} (EC backend: {self.ec.backend.name})", flush=True)
@@ -106,6 +135,8 @@ class Daemon:
     def _get_property(self, conn, sender, path, iface, prop):
         if prop == "DaemonVersion":
             return GLib.Variant("s", __version__)
+        if prop == "ActiveProfile":
+            return GLib.Variant("s", self.engine.profile)
         return None
 
     def _method_call(self, conn, sender, path, iface, method, params, invocation):
@@ -114,6 +145,10 @@ class Daemon:
                 self._set_fan_duty(sender, params, invocation)
             elif method == "RestoreFirmware":
                 self._restore_firmware(sender, invocation)
+            elif method == "SetProfile":
+                self._set_profile(sender, params, invocation)
+            elif method == "SetCurve":
+                self._set_curve(sender, params, invocation)
             else:
                 invocation.return_dbus_error(f"{_ERR}.UnknownMethod", method)
         except Exception as exc:  # never let an exception escape into GLib
@@ -152,13 +187,17 @@ class Daemon:
                 f"{_ERR}.WriteRejected",
                 f"fan(s) {rejected} did not accept the duty; all reverted to firmware auto")
             return
+        self.engine.set_manual()  # stop the curve engine fighting the manual duty
+        self._persist()
         invocation.return_value(None)
 
     def _restore_firmware(self, sender, invocation) -> None:
         if not self._authorized(sender, invocation):
             return
+        self.engine.set_profile(curve.FIRMWARE)
         for f in fans.FANS:
             fans.restore_auto(self.ec, f)
+        self._persist()
         invocation.return_value(None)
 
     def _verify(self, targets, target_raw: int) -> list:
@@ -186,9 +225,66 @@ class Daemon:
                      t.fan1_duty_pct, t.fan2_duty_pct),
                 ),
             )
+            self._run_engine(t.cpu_temp, t.gpu_temp)
         except Exception as exc:
-            print(f"gigactld: telemetry read failed: {exc}", flush=True)
+            print(f"gigactld: tick failed: {exc}", flush=True)
         return True  # keep the timeout running
+
+    def _run_engine(self, cpu_temp: int, gpu_temp: int) -> None:
+        for fan in fans.FANS:
+            src = cpu_temp if fan == fans.CPU_FAN else gpu_temp
+            duty = self.engine.decide(fan, src)
+            if duty is not None:
+                fans.set_duty(self.ec, fan, duty)
+
+    def _apply_now(self) -> None:
+        t = read_telemetry(self.ec)
+        self._run_engine(t.cpu_temp, t.gpu_temp)
+
+    def _persist(self) -> None:
+        try:
+            state.save(self.state_path, state.snapshot(self.engine))
+        except Exception as exc:
+            print(f"gigactld: could not persist state: {exc}", flush=True)
+
+    # --- profile / curve methods --------------------------------------------
+    def _set_profile(self, sender, params, invocation) -> None:
+        (name,) = params.unpack()
+        if not self._authorized(sender, invocation):
+            return
+        try:
+            self.engine.set_profile(name)
+        except ValueError as exc:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", str(exc))
+            return
+        if name == curve.FIRMWARE:
+            for f in fans.FANS:
+                fans.restore_auto(self.ec, f)
+        else:
+            self._apply_now()  # take effect immediately, not on the next tick
+        self._persist()
+        invocation.return_value(None)
+
+    def _set_curve(self, sender, params, invocation) -> None:
+        which, points, linked = params.unpack()
+        if which not in ("cpu", "gpu"):
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad curve {which!r}")
+            return
+        if not self._authorized(sender, invocation):
+            return
+        pts = [tuple(p) for p in points]
+        cur_cpu = self.engine.curve_for(curve.CPU_FAN) or pts
+        cur_gpu = self.engine.curve_for(curve.GPU_FAN) or pts
+        if linked:
+            cpu = gpu = pts
+        elif which == "cpu":
+            cpu, gpu = pts, cur_gpu
+        else:
+            cpu, gpu = cur_cpu, pts
+        self.engine.set_custom(cpu, gpu, linked)
+        self._apply_now()
+        self._persist()
+        invocation.return_value(None)
 
     def stop(self) -> None:
         self._loop.quit()

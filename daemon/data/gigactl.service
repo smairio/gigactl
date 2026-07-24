@@ -9,6 +9,9 @@ BusName=io.github.smairio.gigactl
 ExecStart=/usr/bin/gigactld
 Restart=on-failure
 RestartSec=2
+# Failsafe: on any stop (including a crash), hand the fans back to the firmware
+# curve so they can never be left frozen at a stale manual duty.
+ExecStopPost=-/usr/bin/gigactld --restore-firmware
 
 [Install]
 WantedBy=multi-user.target
