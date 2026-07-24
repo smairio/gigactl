@@ -8,6 +8,7 @@ in beside the signal.
 from __future__ import annotations
 
 import signal
+import time
 
 import gi
 
@@ -15,7 +16,10 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
+from . import authz, fans  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
+
+_ERR = "io.github.smairio.gigactl.Error"
 
 BUS_NAME = "io.github.smairio.gigactl"
 OBJECT_PATH = "/io/github/smairio/gigactl"
@@ -24,6 +28,11 @@ INTERFACE = "io.github.smairio.gigactl.Control"
 INTROSPECTION_XML = f"""
 <node>
   <interface name="{INTERFACE}">
+    <method name="SetFanDuty">
+      <arg name="fan"     type="u" direction="in"/>
+      <arg name="percent" type="u" direction="in"/>
+    </method>
+    <method name="RestoreFirmware"/>
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
       <arg name="gpu_temp"  type="u"/>
@@ -39,9 +48,11 @@ INTROSPECTION_XML = f"""
 
 
 class Daemon:
-    def __init__(self, ec, interval_s: int = 2) -> None:
+    def __init__(self, ec, interval_s: int = 2,
+                 authorizer: authz.Authorizer | None = None) -> None:
         self.ec = ec
         self.interval_s = interval_s
+        self.authorizer = authorizer or authz.Authorizer()
         self._conn: Gio.DBusConnection | None = None
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._loop = GLib.MainLoop()
@@ -75,7 +86,7 @@ class Daemon:
             conn.register_object(
                 OBJECT_PATH,
                 self._node.interfaces[0],
-                None,                # method_call: none yet
+                self._method_call,   # method_call
                 self._get_property,  # get_property
                 None,                # set_property
             )
@@ -96,6 +107,67 @@ class Daemon:
         if prop == "DaemonVersion":
             return GLib.Variant("s", __version__)
         return None
+
+    def _method_call(self, conn, sender, path, iface, method, params, invocation):
+        try:
+            if method == "SetFanDuty":
+                self._set_fan_duty(sender, params, invocation)
+            elif method == "RestoreFirmware":
+                self._restore_firmware(sender, invocation)
+            else:
+                invocation.return_dbus_error(f"{_ERR}.UnknownMethod", method)
+        except Exception as exc:  # never let an exception escape into GLib
+            invocation.return_dbus_error(f"{_ERR}.Failed", str(exc))
+
+    def _authorized(self, sender, invocation) -> bool:
+        if self.authorizer.check(sender, authz.ACTION_CONTROL_FANS):
+            return True
+        invocation.return_dbus_error(
+            f"{_ERR}.NotAuthorized", "not authorized to control the fans")
+        return False
+
+    def _set_fan_duty(self, sender, params, invocation) -> None:
+        fan, percent = params.unpack()
+        if fan not in (fans.BOTH_FANS, fans.CPU_FAN, fans.GPU_FAN):
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad fan {fan}")
+            return
+        if not 0 <= percent <= 100:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad percent {percent}")
+            return
+        if not self._authorized(sender, invocation):
+            return
+
+        targets = fans._REAL_FANS if fan == fans.BOTH_FANS else (fan,)
+        target_raw = fans.pct_to_raw(percent)
+        for f in targets:
+            fans.set_duty(self.ec, f, percent)
+        for f in targets:
+            if not self._verify_or_revert(f, target_raw):
+                invocation.return_dbus_error(
+                    f"{_ERR}.WriteRejected",
+                    f"fan {f} did not accept the duty; reverted to firmware auto")
+                return
+        invocation.return_value(None)
+
+    def _restore_firmware(self, sender, invocation) -> None:
+        if not self._authorized(sender, invocation):
+            return
+        for f in fans._REAL_FANS:
+            fans.restore_auto(self.ec, f)
+        invocation.return_value(None)
+
+    def _verify_or_revert(self, fan: int, target_raw: int) -> bool:
+        """Poll the duty readback briefly; if the EC never took the write,
+        hand the fan back to firmware and report failure."""
+        reg = fans.DUTY_REG[fan]
+        for _ in range(6):  # ~1.5s; the EC ramps, it doesn't snap
+            time.sleep(0.25)
+            with self.ec.transaction():
+                observed = self.ec.read_u8(reg)
+            if fans.duty_accepted(target_raw, observed):
+                return True
+        fans.restore_auto(self.ec, fan)
+        return False
 
     # --- telemetry loop ------------------------------------------------------
     def _tick(self) -> bool:
