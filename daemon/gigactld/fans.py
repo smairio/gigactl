@@ -1,17 +1,11 @@
-"""Fan control — the Clevo EC mailbox doorbell sequence.
-
-Set a fan to a duty, or hand it back to the firmware curve. The mailbox is
-written parameter-first, command (doorbell) last; see ``docs/PROTOCOL.md``.
-Every sequence runs inside one EC transaction so it stays atomic.
-"""
+"""Fan control — set a fan's duty or hand it back to firmware, via the shared
+EC mailbox (see ``mailbox.py`` and ``docs/PROTOCOL.md``)."""
 from __future__ import annotations
 
-# mailbox registers
-FCMD = 0xF8   # command / doorbell (written last)
-FDAT = 0xF9   # sub-command / fan selector
-FBUF = 0xFA   # parameter (duty, or fan# for the auto sentinel)
-DOORBELL = 0xC1
-FAN_AUTO = 0xFF  # FDAT sentinel meaning "hand fan back to firmware"
+from .mailbox import command, pct_to_byte
+
+DOORBELL = 0xC1     # fan set / auto command
+FAN_AUTO = 0xFF     # FDAT sentinel: hand a fan back to the firmware curve
 
 # current-duty readback registers (0-255)
 DUTY_REG = {1: 0xCE, 2: 0xCF}
@@ -21,21 +15,12 @@ GPU_FAN = 2
 BOTH_FANS = 0
 FANS = (CPU_FAN, GPU_FAN)  # the real fans, in order
 
-# The EC duty register snaps to the commanded value, so a taken write reads
-# back at (near) target and a rejected one stays at the firmware value. A small
-# margin absorbs rounding.
+# the EC duty register snaps to the commanded value; small margin absorbs rounding
 _DUTY_TOLERANCE = 16
 
 
-def pct_to_raw(pct: int) -> int:
-    return round(max(0, min(100, pct)) * 255 / 100)
-
-
 def expand(selector: int) -> tuple[int, ...]:
-    """Map a fan selector to the real fans it addresses.
-
-    0 = both, 1 = CPU, 2 = GPU. Raises ValueError on anything else.
-    """
+    """Map a fan selector to the real fans it addresses (0=both, 1=CPU, 2=GPU)."""
     if selector == BOTH_FANS:
         return FANS
     if selector in FANS:
@@ -43,26 +28,18 @@ def expand(selector: int) -> tuple[int, ...]:
     raise ValueError(f"invalid fan selector {selector!r}; expected 0, 1 or 2")
 
 
-def _doorbell(ec, fdat: int, fbuf: int) -> None:
-    """Write one mailbox command atomically: params first, doorbell last."""
-    with ec.transaction():
-        ec.write_u8(FDAT, fdat)
-        ec.write_u8(FBUF, fbuf)
-        ec.write_u8(FCMD, DOORBELL)
-
-
 def set_duty(ec, fan: int, pct: int) -> None:
     """Set a single fan (1=CPU, 2=GPU) to ``pct``% duty."""
     if fan not in FANS:
         raise ValueError(f"invalid fan {fan!r}; expected one of {FANS}")
-    _doorbell(ec, fan, pct_to_raw(pct))
+    command(ec, fan, (pct_to_byte(pct),), doorbell=DOORBELL)
 
 
 def restore_auto(ec, fan: int) -> None:
     """Hand a single fan back to the firmware curve."""
     if fan not in FANS:
         raise ValueError(f"invalid fan {fan!r}; expected one of {FANS}")
-    _doorbell(ec, FAN_AUTO, fan)
+    command(ec, FAN_AUTO, (fan,), doorbell=DOORBELL)
 
 
 def read_duty(ec, fan: int) -> int:
@@ -72,7 +49,7 @@ def read_duty(ec, fan: int) -> int:
 
 
 def duty_matches(target_raw: int, observed_raw: int) -> bool:
-    """Did the EC take the duty write? True iff the readback is within
-    tolerance of the target in *either* direction — a rejected write (up or
-    down) leaves the register at the firmware value, far from target."""
+    """Did the EC take the duty write? True iff the readback is within tolerance
+    of the target in either direction — a rejected write (up or down) leaves the
+    register at the firmware value, far from target."""
     return abs(observed_raw - target_raw) <= _DUTY_TOLERANCE

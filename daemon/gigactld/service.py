@@ -15,7 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
-from . import authz, curve, fans, keyboard, state  # noqa: E402
+from . import authz, curve, fans, keyboard, mailbox, state  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
 
 _ERR = "io.github.smairio.gigactl.Error"
@@ -193,7 +193,7 @@ class Daemon:
         if not self._authorized(sender, invocation):
             return
 
-        target_raw = fans.pct_to_raw(percent)
+        target_raw = mailbox.pct_to_byte(percent)
         for f in targets:
             fans.set_duty(self.ec, f, percent)
         rejected = self._verify(targets, target_raw)
@@ -306,6 +306,10 @@ class Daemon:
 
     def _set_keyboard_color(self, sender, params, invocation) -> None:
         r, g, b = params.unpack()
+        if not all(0 <= c <= 255 for c in (r, g, b)):
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs",
+                                         f"colour components must be 0-255: {(r, g, b)}")
+            return
         if not self._kbd_authorized(sender, invocation):
             return
         keyboard.set_color(self.ec, r, g, b)
