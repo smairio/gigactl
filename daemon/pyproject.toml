@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gigactld"
+version = "0.1.0"
+description = "GigaControl daemon — EC access + D-Bus API for Gigabyte G5/G6 laptops"
+requires-python = ">=3.10"
+# Runtime dependency is PyGObject (system package python3-gi); it is not
+# pip-installed here — the .deb (ticket #11) depends on the distro package.
+
+[project.scripts]
+gigactld = "gigactld.__main__:main"
+
+[tool.setuptools]
+packages = ["gigactld"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
