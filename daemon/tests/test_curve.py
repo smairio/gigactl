@@ -108,3 +108,37 @@ def test_engine_manual_mode_drives_nothing():
     e.set_manual()                       # a manual SetFanDuty took over
     assert e.profile == curve.MANUAL
     assert e.decide(curve.CPU_FAN, 95) is None
+
+
+def test_floor_holds_on_small_move_into_hot_zone():
+    # the review bug: hysteresis must NOT suppress the safety floor
+    e = curve.ProfileEngine(hysteresis=4, floor_pct=30, floor_temp=85)
+    e.set_custom(cpu_points=[(40, 10), (95, 15)], gpu_points=None, linked=True)
+    e.decide(curve.CPU_FAN, 83)                 # cool-ish, low duty
+    d = e.decide(curve.CPU_FAN, 86)             # +3C (< hysteresis) into the hot zone
+    assert d is not None and d >= 30            # floor engages anyway
+
+
+def test_floor_engages_from_cpu_temp_for_gpu_fan():
+    # GPU cool but CPU hot -> the GPU fan is still floored (max of the two temps)
+    e = curve.ProfileEngine(floor_pct=30, floor_temp=85)
+    e.set_custom(cpu_points=[(40, 10), (95, 15)], gpu_points=None, linked=True)
+    assert e.decide(curve.GPU_FAN, 50, cpu_temp=90) >= 30
+
+
+def test_normalize_strict_temps_against_ceiling():
+    # adversarial: everything piled at the top must still come out strictly increasing
+    n = curve.normalize([(100, 40), (100, 90), (100, 10), (99, 50), (100, 100)])
+    temps = [t for t, _ in n]
+    assert len(temps) == 5
+    assert temps == sorted(set(temps))          # strictly increasing, no dupes
+    assert all(0 <= t <= 100 for t in temps)
+
+
+def test_set_one_curve_preserves_the_other_fan_when_split():
+    e = curve.ProfileEngine()
+    e.set_one_curve("cpu", [(40, 30), (95, 100)], linked=True)   # both = steep
+    before_gpu = list(e.curve_for(curve.GPU_FAN))
+    e.set_one_curve("cpu", [(40, 60), (95, 100)], linked=False)  # change CPU only
+    assert e.curve_for(curve.GPU_FAN) == before_gpu             # GPU untouched
+    assert e.curve_for(curve.CPU_FAN) != before_gpu

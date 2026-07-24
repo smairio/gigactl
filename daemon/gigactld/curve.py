@@ -59,41 +59,37 @@ def apply_floor(duty: int, temp: int, floor_pct: int = FLOOR_PCT,
 
 
 def normalize(points: list[Point]) -> Curve:
-    """Coerce arbitrary points into a valid 5-point curve: clamp to range,
-    sort by temp, dedupe/space temps so they strictly increase, force duties
-    non-decreasing, then pad or truncate to exactly ``POINTS`` points."""
+    """Coerce arbitrary points into a valid ``POINTS``-point curve: clamp to
+    range, sort, reduce/pad to exactly ``POINTS`` points, then force temps to
+    strictly increase (leaving headroom against the 100 ceiling) and duties to
+    be non-decreasing. Idempotent on an already-valid curve."""
     pts = [(max(0, min(100, int(t))), max(0, min(100, int(d)))) for t, d in points]
     pts.sort(key=lambda p: p[0])
+    if not pts:
+        pts = [(40, FLOOR_PCT)]
 
-    # strictly increasing temps: bump any that collide with the previous
+    if len(pts) > POINTS:  # keep first, last, and evenly-spaced middles
+        idx = sorted({round(i * (len(pts) - 1) / (POINTS - 1)) for i in range(POINTS)})
+        pts = [pts[i] for i in idx]
+    while len(pts) < POINTS:
+        pts.append(pts[-1])
+
+    # strictly-increasing temps, reserving room for the points that follow so
+    # collisions near the top never pile up against the 100 ceiling
     spaced: list[Point] = []
-    for t, d in pts:
-        if spaced and t <= spaced[-1][0]:
-            t = min(100, spaced[-1][0] + 1)
-        spaced.append((t, d))
+    for i, (t, d) in enumerate(pts):
+        lo = 0 if i == 0 else spaced[-1][0] + 1
+        hi = 100 - (POINTS - 1 - i)
+        spaced.append((min(max(t, lo), hi), d))
 
     # non-decreasing duties
-    mono: list[Point] = []
+    out: list[Point] = []
     last_d = 0
     for t, d in spaced:
         d = max(d, last_d)
-        mono.append((t, d))
+        out.append((t, d))
         last_d = d
-
-    if not mono:
-        mono = [(40, FLOOR_PCT)]
-    # pad to POINTS by repeating the last point (temps still strictly increase)
-    while len(mono) < POINTS:
-        t = min(100, mono[-1][0] + 1)
-        mono.append((t, mono[-1][1]))
-    if len(mono) > POINTS:
-        # keep first, last, and evenly-spaced middles
-        idx = [round(i * (len(mono) - 1) / (POINTS - 1)) for i in range(POINTS)]
-        mono = [mono[i] for i in sorted(set(idx))]
-        while len(mono) < POINTS:  # dedupe may shrink; re-pad
-            t = min(100, mono[-1][0] + 1)
-            mono.append((t, mono[-1][1]))
-    return mono
+    return out
 
 
 class ProfileEngine:
@@ -138,6 +134,25 @@ class ProfileEngine:
         self.profile = CUSTOM
         self._reset_state()
 
+    def set_one_curve(self, which: str, points, linked: bool) -> None:
+        """Update one fan's curve ('cpu'/'gpu'), preserving the other (or
+        mirroring it when linked), and select the custom profile."""
+        if which not in ("cpu", "gpu"):
+            raise ValueError(f"unknown curve {which!r}; expected 'cpu' or 'gpu'")
+        new = normalize([tuple(p) for p in points])
+        cur_cpu = self._curves.get(CPU_FAN) or new
+        cur_gpu = self._curves.get(GPU_FAN) or new
+        if linked:
+            cpu = gpu = new
+        elif which == "cpu":
+            cpu, gpu = new, cur_gpu
+        else:
+            cpu, gpu = cur_cpu, new
+        self.linked = linked
+        self._curves = {CPU_FAN: cpu, GPU_FAN: gpu}
+        self.profile = CUSTOM
+        self._reset_state()
+
     def set_manual(self) -> None:
         """A manual duty override is in effect; the engine stops driving until
         a profile is (re)selected."""
@@ -148,21 +163,31 @@ class ProfileEngine:
     def curve_for(self, fan: int) -> Curve:
         return self._curves.get(fan, [])
 
-    def decide(self, fan: int, source_temp: int) -> Optional[int]:
+    def decide(self, fan: int, source_temp: int,
+               cpu_temp: Optional[int] = None) -> Optional[int]:
         """Duty% to apply to ``fan`` given its source temp, or None to leave it.
 
-        Returns None when driving firmware, when the temp hasn't moved past the
-        hysteresis band since the last decision, or when the target is unchanged.
+        Hysteresis governs only the *curve* target (held across sub-4 °C moves).
+        The safety floor is evaluated every tick regardless, and engages when
+        either the fan's own component or the CPU is hot — so a fan can never
+        sit below the floor while something is hot, even mid-hysteresis.
         """
         if self.profile in (FIRMWARE, MANUAL):
             return None
+        if cpu_temp is None:
+            cpu_temp = source_temp
         last_t = self._last_temp.get(fan)
-        if last_t is not None and abs(source_temp - last_t) < self.hysteresis:
-            return None
-        target = apply_floor(duty_for(self._curves[fan], source_temp), source_temp,
+        last_d = self._last_duty.get(fan)
+
+        if last_t is None or abs(source_temp - last_t) >= self.hysteresis:
+            curve_target = duty_for(self._curves[fan], source_temp)
+            self._last_temp[fan] = source_temp
+        else:  # small move: hold the curve target we last settled on
+            curve_target = last_d if last_d is not None else duty_for(self._curves[fan], source_temp)
+
+        target = apply_floor(curve_target, max(source_temp, cpu_temp),
                              self.floor_pct, self.floor_temp)
-        self._last_temp[fan] = source_temp
-        if target == self._last_duty.get(fan):
+        if target == last_d:
             return None
         self._last_duty[fan] = target
         return target

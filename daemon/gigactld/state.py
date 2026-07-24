@@ -38,11 +38,15 @@ def load(path: str):
 
 
 def restore(engine, data: dict) -> None:
-    """Apply a loaded snapshot to an engine."""
+    """Apply a loaded snapshot to an engine. Manual/unknown profiles fall back
+    to firmware — 'manual' is a transient override that shouldn't have been
+    saved, and firmware is the safe default."""
     profile = data.get("profile", curve.FIRMWARE)
     if profile == curve.CUSTOM:
         cpu = [tuple(p) for p in data.get("cpu", [])]
         gpu = [tuple(p) for p in data.get("gpu", [])]
         engine.set_custom(cpu, gpu or None, linked=data.get("linked", True))
-    else:
+    elif profile in curve.PROFILES or profile == curve.FIRMWARE:
         engine.set_profile(profile)
+    else:
+        engine.set_profile(curve.FIRMWARE)

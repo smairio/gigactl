@@ -187,8 +187,10 @@ class Daemon:
                 f"{_ERR}.WriteRejected",
                 f"fan(s) {rejected} did not accept the duty; all reverted to firmware auto")
             return
-        self.engine.set_manual()  # stop the curve engine fighting the manual duty
-        self._persist()
+        # manual is a transient override — stop the engine fighting it, but do
+        # NOT persist it; the last real profile stays saved and is restored on
+        # the next start/reboot.
+        self.engine.set_manual()
         invocation.return_value(None)
 
     def _restore_firmware(self, sender, invocation) -> None:
@@ -233,7 +235,7 @@ class Daemon:
     def _run_engine(self, cpu_temp: int, gpu_temp: int) -> None:
         for fan in fans.FANS:
             src = cpu_temp if fan == fans.CPU_FAN else gpu_temp
-            duty = self.engine.decide(fan, src)
+            duty = self.engine.decide(fan, src, cpu_temp)
             if duty is not None:
                 fans.set_duty(self.ec, fan, duty)
 
@@ -267,21 +269,13 @@ class Daemon:
 
     def _set_curve(self, sender, params, invocation) -> None:
         which, points, linked = params.unpack()
-        if which not in ("cpu", "gpu"):
-            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad curve {which!r}")
-            return
         if not self._authorized(sender, invocation):
             return
-        pts = [tuple(p) for p in points]
-        cur_cpu = self.engine.curve_for(curve.CPU_FAN) or pts
-        cur_gpu = self.engine.curve_for(curve.GPU_FAN) or pts
-        if linked:
-            cpu = gpu = pts
-        elif which == "cpu":
-            cpu, gpu = pts, cur_gpu
-        else:
-            cpu, gpu = cur_cpu, pts
-        self.engine.set_custom(cpu, gpu, linked)
+        try:
+            self.engine.set_one_curve(which, points, linked)
+        except ValueError as exc:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", str(exc))
+            return
         self._apply_now()
         self._persist()
         invocation.return_value(None)
