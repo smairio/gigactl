@@ -1,0 +1,247 @@
+<!doctype html>
+<!--
+  gigactl — CHOSEN main-window design (reference mockup for the GTK4/libadwaita build).
+  Winner of the /prototype round: variant A (stacked dashboard) as the base,
+  + variant C's model-verification banner, + variant B's curve graph in the Custom view.
+  Two screens: Overview (default) and Custom curve. Toggle bottom-right. Light/dark aware.
+  This is a spec artifact, not shipping code — the app is implemented natively in GTK4.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gigactl — main window</title>
+<style>
+  :root{
+    --bg:#f6f5f4; --window:#faf9f8; --card:#ffffff; --card-2:#fbfbfa;
+    --hd:#ebebea; --hd-border:#dcdcdc;
+    --ink:#1d1d1f; --ink-2:#5e5c64; --ink-3:#8a878f;
+    --line:#e0dfde; --line-2:#ecebea;
+    --accent:#3584e4; --accent-ink:#1c71d8;
+    --cool:#26a269; --warm:#e5a50a; --hot:#e01b24;
+    --shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.08);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.07);
+    --r:13px;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#1c1c1e; --window:#242427; --card:#303034; --card-2:#2a2a2d; --hd:#303034; --hd-border:#1b1b1d;
+    --ink:#fff; --ink-2:#c6c4c9; --ink-3:#918f97; --line:#3a3a3e; --line-2:#333337;
+    --accent:#78aeed; --accent-ink:#78aeed; --cool:#4dd48a; --warm:#f5c211; --hot:#ff6b6b;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.45); --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  }}
+  :root[data-theme="dark"]{
+    --bg:#1c1c1e; --window:#242427; --card:#303034; --card-2:#2a2a2d; --hd:#303034; --hd-border:#1b1b1d;
+    --ink:#fff; --ink-2:#c6c4c9; --ink-3:#918f97; --line:#3a3a3e; --line-2:#333337;
+    --accent:#78aeed; --accent-ink:#78aeed; --cool:#4dd48a; --warm:#f5c211; --hot:#ff6b6b;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.45); --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f5f4; --window:#faf9f8; --card:#fff; --card-2:#fbfbfa; --hd:#ebebea; --hd-border:#dcdcdc;
+    --ink:#1d1d1f; --ink-2:#5e5c64; --ink-3:#8a878f; --line:#e0dfde; --line-2:#ecebea;
+    --accent:#3584e4; --accent-ink:#1c71d8; --cool:#26a269; --warm:#e5a50a; --hot:#e01b24;
+    --shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.08); --shadow-sm:0 1px 2px rgba(0,0,0,.07);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"Adwaita Sans","Cantarell",system-ui,-apple-system,"Segoe UI",Inter,sans-serif;
+    background:var(--bg);
+    color:var(--ink);-webkit-font-smoothing:antialiased;
+    display:flex;align-items:center;justify-content:center;padding:34px 20px 90px;letter-spacing:-.01em;
+  }
+  .stage{width:100%;max-width:900px}
+  .win{background:var(--window);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;border:1px solid var(--hd-border)}
+  .titlebar{height:47px;background:var(--hd);border-bottom:1px solid var(--hd-border);display:flex;align-items:center;gap:10px;padding:0 14px;position:relative}
+  .traffic{display:flex;gap:8px}.traffic i{width:12px;height:12px;border-radius:50%;display:block}
+  .traffic .m{background:#ffbd2e}.traffic .x{background:#ff5f57}.traffic .z{background:#28c840}
+  .tt{position:absolute;left:0;right:0;text-align:center;font-size:13px;font-weight:700;color:var(--ink-2);pointer-events:none}
+  .hd-actions{margin-left:auto;display:flex;gap:6px;z-index:1}
+  .icobtn{width:30px;height:30px;border-radius:8px;border:0;background:transparent;color:var(--ink-2);display:grid;place-items:center;cursor:pointer;font-size:15px}
+  .icobtn:hover{background:color-mix(in srgb,var(--ink) 10%,transparent)}
+  .body{padding:22px}
+  .eyebrow{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+  .muted{color:var(--ink-2)}
+  .divider{height:1px;background:var(--line-2)}
+  h2.sec{font-size:16px;font-weight:800;letter-spacing:-.02em}
+  .row-lbl{font-size:13.5px;font-weight:600}
+
+  /* verification banner (from variant C) */
+  .verbar{display:flex;align-items:center;gap:10px;font-size:12.5px;font-weight:600;
+    padding:9px 13px;border-radius:10px;margin-bottom:18px;
+    background:color-mix(in srgb,var(--cool) 13%,transparent);color:var(--cool)}
+  .verbar .g{font-size:14px}
+
+  .a-hero{display:flex;gap:26px;align-items:center;padding:2px 4px 20px}
+  .gauge{position:relative;width:126px;height:126px;flex:none}
+  .gauge .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:800;font-variant-numeric:tabular-nums}
+  .gauge .num small{font-size:14px}
+  .gauge .lbl{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+  .a-side{flex:1;min-width:0}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:99px;background:color-mix(in srgb,var(--warm) 16%,transparent);color:var(--warm)}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 25%,transparent)}
+  .a-fans{display:flex;gap:22px;margin-top:16px}
+  .rpmline{display:flex;align-items:baseline;gap:6px}.rpm{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}.unit{font-size:11px;font-weight:700;color:var(--ink-3)}
+
+  .profiles{display:flex;gap:8px;flex-wrap:wrap}
+  .prof{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);border-radius:11px;padding:13px 10px 11px;cursor:pointer;text-align:center;transition:.16s cubic-bezier(.2,.7,.3,1);display:flex;flex-direction:column;align-items:center;gap:7px;color:var(--ink)}
+  .prof:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .prof .g{font-size:20px;line-height:1}.prof .n{font-size:12.5px;font-weight:700}.prof .d{font-size:10.5px;color:var(--ink-3)}
+  .prof[aria-pressed="true"]{border-color:transparent;color:#fff;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 92%,#fff),var(--accent));box-shadow:0 6px 16px -4px color-mix(in srgb,var(--accent) 60%,transparent)}
+  .prof[aria-pressed="true"] .d{color:rgba(255,255,255,.82)}
+  .prof.firm[aria-pressed="true"]{background:linear-gradient(180deg,#6b7280,#4b5563);box-shadow:0 6px 16px -4px rgba(75,85,99,.5)}
+
+  .kbprev{border-radius:10px;padding:14px;background:#111216;position:relative;overflow:hidden}
+  .kbglow{position:absolute;inset:0;opacity:.9;background:radial-gradient(120% 140% at 50% 130%,color-mix(in srgb,var(--kbd) 70%,transparent),transparent 70%)}
+  .keys{position:relative;display:grid;grid-template-columns:repeat(14,1fr);gap:4px}
+  .keys i{height:15px;border-radius:3px;background:#2a2c33;box-shadow:0 0 8px -1px var(--kbd),inset 0 0 0 1px color-mix(in srgb,var(--kbd) 50%,#2a2c33)}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .sw{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;box-shadow:var(--shadow-sm)}
+  .sw[aria-pressed="true"]{border-color:var(--ink);outline:2px solid var(--card);outline-offset:-4px}
+  .slider{height:7px;border-radius:99px;background:var(--line);position:relative}
+  .slider .fill{position:absolute;inset:0 auto 0 0;border-radius:99px;background:var(--accent)}
+  .slider .knob{position:absolute;top:50%;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.35);transform:translate(-50%,-50%);border:1px solid rgba(0,0,0,.08)}
+  .a-kb{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:center}
+
+  /* custom-curve screen (from variant B) */
+  .backlink{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--accent-ink);cursor:pointer;background:none;border:0;padding:0;margin-bottom:14px}
+  .curvebox{background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .curve{width:100%;height:100%;display:block}
+  .seg{display:inline-flex;background:var(--card-2);border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px}
+  .seg button{border:0;background:transparent;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:6px 13px;border-radius:6px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:var(--shadow-sm)}
+  .hidden{display:none!important}
+  .switch{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:6px;background:rgba(20,20,22,.92);color:#fff;border-radius:99px;padding:6px 8px;box-shadow:0 10px 30px rgba(0,0,0,.4);backdrop-filter:blur(8px)}
+  .switch button{background:transparent;border:0;color:#fff;cursor:pointer;font-size:12.5px;font-weight:700;padding:7px 14px;border-radius:99px}
+  .switch button[aria-pressed="true"]{background:rgba(255,255,255,.16)}
+  .switch .theme{font-size:13px;padding:7px 11px}
+</style>
+</head>
+<body>
+<div class="stage">
+  <section class="win">
+    <div class="titlebar">
+      <div class="traffic"><i class="x"></i><i class="m"></i><i class="z"></i></div>
+      <div class="tt">gigactl</div>
+      <div class="hd-actions"><button class="icobtn" title="Settings">⚙</button><button class="icobtn" title="Menu">☰</button></div>
+    </div>
+
+    <!-- ===== OVERVIEW ===== -->
+    <div class="body" id="screen-overview">
+      <div class="verbar"><span class="g">✓</span>Gigabyte G6 KF detected · fully verified</div>
+
+      <div class="a-hero">
+        <div style="display:flex;gap:16px">
+          <div class="gauge" data-gauge="91"><div class="num" style="color:var(--hot)">91<small>°</small></div><div class="lbl">CPU</div></div>
+          <div class="gauge" data-gauge="73"><div class="num" style="color:var(--warm)">73<small>°</small></div><div class="lbl">GPU</div></div>
+        </div>
+        <div class="a-side">
+          <span class="pill"><span class="dot"></span>Running hot — firmware curve is lazy</span>
+          <div class="a-fans">
+            <div><div class="eyebrow">CPU fan</div><div class="rpmline"><span class="rpm">2 486</span><span class="unit">rpm</span></div><div class="muted" style="font-size:12px">27% duty</div></div>
+            <div><div class="eyebrow">GPU fan</div><div class="rpmline"><span class="rpm">2 411</span><span class="unit">rpm</span></div><div class="muted" style="font-size:12px">27% duty</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin:2px 0 12px">
+        <h2 class="sec">Fan profile</h2><span class="muted" style="font-size:12.5px">Now: <b>Balanced</b></span>
+      </div>
+      <div class="profiles">
+        <button class="prof" aria-pressed="false"><span class="g">🍃</span><span class="n">Quiet</span><span class="d">low noise</span></button>
+        <button class="prof" aria-pressed="true"><span class="g">⚖️</span><span class="n">Balanced</span><span class="d">recommended</span></button>
+        <button class="prof" aria-pressed="false"><span class="g">🔥</span><span class="n">Performance</span><span class="d">cooler</span></button>
+        <button class="prof" aria-pressed="false"><span class="g">🚀</span><span class="n">Max</span><span class="d">100%</span></button>
+        <button class="prof firm" aria-pressed="false"><span class="g">🖥️</span><span class="n">Firmware</span><span class="d">automatic</span></button>
+        <button class="prof" id="to-custom" aria-pressed="false"><span class="g">✏️</span><span class="n">Custom…</span><span class="d">edit curve</span></button>
+      </div>
+
+      <div class="divider" style="margin:18px 0"></div>
+
+      <div class="a-kb">
+        <div>
+          <h2 class="sec" style="margin-bottom:12px">Keyboard light</h2>
+          <div class="swatches" style="margin-bottom:14px">
+            <span class="sw" style="background:#1f6fe5" aria-pressed="true" title="Blue"></span>
+            <span class="sw" style="background:#e01b24" title="Red"></span>
+            <span class="sw" style="background:#26a269" title="Green"></span>
+            <span class="sw" style="background:#f5c211" title="Yellow"></span>
+            <span class="sw" style="background:#9141ac" title="Purple"></span>
+            <span class="sw" style="background:#ffffff" title="White"></span>
+            <span class="sw" style="background:conic-gradient(from 0deg,red,#ff0,lime,cyan,blue,magenta,red)" title="Custom…"></span>
+          </div>
+          <div class="row-lbl" style="margin-bottom:7px">Brightness</div>
+          <div class="slider"><div class="fill" style="right:22%"></div><div class="knob" style="left:78%"></div></div>
+        </div>
+        <div class="kbprev" style="--kbd:#1f6fe5"><div class="kbglow"></div>
+          <div class="keys"><script>for(let i=0;i<42;i++)document.write('<i></i>')</script></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CUSTOM CURVE ===== -->
+    <div class="body hidden" id="screen-curve">
+      <button class="backlink" id="to-overview">‹ Back to overview</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <h2 class="sec">Custom fan curve</h2>
+        <div class="seg"><button aria-pressed="true">🔗 Linked</button><button aria-pressed="false">Split CPU / GPU</button></div>
+      </div>
+      <div class="curvebox">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span class="eyebrow">Temperature → fan speed</span>
+          <span class="muted" style="font-size:11.5px">drag points to edit</span>
+        </div>
+        <div style="height:210px">
+          <svg class="curve" viewBox="0 0 320 210" preserveAspectRatio="none">
+            <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="var(--accent)" stop-opacity=".26"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+            <g stroke="var(--line-2)" stroke-width="1">
+              <line x1="0" y1="52" x2="320" y2="52"/><line x1="0" y1="105" x2="320" y2="105"/><line x1="0" y1="158" x2="320" y2="158"/></g>
+            <path d="M0,182 L76,170 L160,120 L232,62 L320,22 L320,210 L0,210 Z" fill="url(#cg)"/>
+            <path d="M0,182 L76,170 L160,120 L232,62 L320,22" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>
+            <g fill="var(--card)" stroke="var(--accent)" stroke-width="2.5">
+              <circle cx="76" cy="170" r="5.5"/><circle cx="160" cy="120" r="5.5"/><circle cx="232" cy="62" r="5.5"/><circle cx="320" cy="22" r="5.5"/></g>
+            <line x1="250" y1="0" x2="250" y2="210" stroke="var(--hot)" stroke-width="1" stroke-dasharray="3 3" opacity=".7"/>
+            <circle cx="250" cy="52" r="5" fill="var(--hot)"/>
+          </svg>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-3);margin-top:6px"><span>40°</span><span>55°</span><span>70°</span><span>85°</span><span>100°</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
+        <span class="pill"><span class="dot"></span>CPU now 91° → fans 78%</span>
+        <span class="muted" style="font-size:12px">Min 30% floor above 85° · applies live</span>
+        <button class="prof firm" aria-pressed="false" style="flex:none;flex-direction:row;gap:8px;padding:9px 15px;margin-left:auto"><span class="g" style="font-size:15px">🖥️</span><span class="n">Firmware auto</span></button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="switch" role="group" aria-label="Screen switcher">
+  <button id="s-ov" aria-pressed="true">Overview</button>
+  <button id="s-cv" aria-pressed="false">Custom curve</button>
+  <button class="theme" id="theme" title="Toggle light/dark">◐</button>
+</div>
+
+<script>
+  const ov=document.getElementById('screen-overview'), cv=document.getElementById('screen-curve');
+  function goto(s){
+    ov.classList.toggle('hidden',s!=='ov');cv.classList.toggle('hidden',s!=='cv');
+    document.getElementById('s-ov').setAttribute('aria-pressed',s==='ov');
+    document.getElementById('s-cv').setAttribute('aria-pressed',s==='cv');
+  }
+  document.getElementById('s-ov').onclick=()=>goto('ov');
+  document.getElementById('s-cv').onclick=()=>goto('cv');
+  document.getElementById('to-custom').onclick=()=>goto('cv');
+  document.getElementById('to-overview').onclick=()=>goto('ov');
+  document.querySelectorAll('[data-gauge]').forEach(g=>{
+    const t=+g.dataset.gauge,pct=Math.min(1,(t-30)/70),col=t>=90?'var(--hot)':t>=75?'var(--warm)':'var(--cool)',R=55,C=2*Math.PI*R;
+    g.insertAdjacentHTML('afterbegin',
+      `<svg width="126" height="126" viewBox="0 0 126 126" style="transform:rotate(0)">
+        <circle cx="63" cy="63" r="${R}" fill="none" stroke="var(--line)" stroke-width="9"/>
+        <circle cx="63" cy="63" r="${R}" fill="none" stroke="${col}" stroke-width="9" stroke-linecap="round"
+          stroke-dasharray="${C}" stroke-dashoffset="${C*(1-pct*.75)}" transform="rotate(135 63 63)"/></svg>`);
+  });
+  document.getElementById('theme').onclick=()=>{const r=document.documentElement;
+    const now=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+    r.setAttribute('data-theme',now==='dark'?'light':'dark');};
+</script>
+</body>
+</html>
