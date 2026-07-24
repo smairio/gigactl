@@ -48,8 +48,8 @@ def read_telemetry(ec) -> Telemetry:
         gpu = ec.read_u8(GPU_TEMP)
         duty1 = ec.read_u8(DUTY_FAN1)
         duty2 = ec.read_u8(DUTY_FAN2)
-        period1 = (ec.read_u8(TACH1_HI) << 8) | ec.read_u8(TACH1_LO)
-        period2 = (ec.read_u8(TACH2_HI) << 8) | ec.read_u8(TACH2_LO)
+        period1 = ec.read_u16_be(TACH1_HI, TACH1_LO)
+        period2 = ec.read_u16_be(TACH2_HI, TACH2_LO)
     return Telemetry(
         cpu_temp=cpu,
         gpu_temp=gpu,

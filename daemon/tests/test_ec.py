@@ -43,6 +43,16 @@ def test_controller_read_u8_via_backend(tmp_path):
         assert ec.read_u8(0x0A) == 0x0A
 
 
+def test_controller_read_u16_be_is_high_byte_first(tmp_path):
+    def setup(d):
+        d[0xD0], d[0xD1] = 0x03, 0x6C  # 0x036C = 876
+
+    io = _fill(tmp_path / "io", setup)
+    ec = EmbeddedController(backend=EcSysBackend(str(io)),
+                            lock_path=str(tmp_path / "lock"))
+    assert ec.read_u16_be(0xD0, 0xD1) == 0x036C
+
+
 def test_transaction_takes_an_exclusive_lock(tmp_path):
     io = _fill(tmp_path / "io")
     lock = tmp_path / "lock"

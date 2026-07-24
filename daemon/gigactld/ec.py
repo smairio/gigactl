@@ -9,8 +9,10 @@ Two backends, tried in order of preference:
   ``ec_sys`` is unavailable.
 
 Every logical operation runs inside :meth:`EmbeddedController.transaction`,
-which holds an flock so a multi-write doorbell sequence stays atomic and the
-CLI's direct-write fallback can never interleave with us.
+which holds an flock so a multi-write doorbell sequence stays atomic. That lock
+is the serialization point every EC writer is meant to take; once the CLI is
+reworked to share it (ticket #17), the daemon and a direct-write fallback can no
+longer interleave. Today only the daemon takes it.
 """
 from __future__ import annotations
 
@@ -143,6 +145,10 @@ class EmbeddedController:
 
     def read_u8(self, offset: int) -> int:
         return self.backend.read(offset)
+
+    def read_u16_be(self, hi_offset: int, lo_offset: int) -> int:
+        """Read a big-endian 16-bit value (high byte at ``hi_offset``)."""
+        return (self.backend.read(hi_offset) << 8) | self.backend.read(lo_offset)
 
     def write_u8(self, offset: int, value: int) -> None:
         self.backend.write(offset, value)

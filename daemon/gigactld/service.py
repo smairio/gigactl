@@ -27,10 +27,10 @@ INTROSPECTION_XML = f"""
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
       <arg name="gpu_temp"  type="u"/>
-      <arg name="fan1_rpm"  type="u"/>
-      <arg name="fan2_rpm"  type="u"/>
-      <arg name="fan1_duty" type="u"/>
-      <arg name="fan2_duty" type="u"/>
+      <arg name="fan1_rpm"      type="u"/>
+      <arg name="fan2_rpm"      type="u"/>
+      <arg name="fan1_duty_pct" type="u"/>
+      <arg name="fan2_duty_pct" type="u"/>
     </signal>
     <property name="DaemonVersion" type="s" access="read"/>
   </interface>

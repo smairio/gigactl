@@ -12,6 +12,9 @@ class FakeEc:
     def read_u8(self, off):
         return self.data[off]
 
+    def read_u16_be(self, hi, lo):
+        return (self.data[hi] << 8) | self.data[lo]
+
     def transaction(self):
         return nullcontext()
 

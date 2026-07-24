@@ -9,9 +9,6 @@ BusName=io.github.smairio.gigactl
 ExecStart=/usr/bin/gigactld
 Restart=on-failure
 RestartSec=2
-# Safety (effective once control lands in #13/#15): if the daemon stops for any
-# reason, hand the fans back to the firmware curve rather than leaving them frozen.
-ExecStopPost=-/usr/bin/gfan auto
 
 [Install]
 WantedBy=multi-user.target
