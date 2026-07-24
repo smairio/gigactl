@@ -1,0 +1,177 @@
+#!/bin/bash
+# gfan — fan control for Gigabyte G6 KF (Clevo-ODM EC, reverse-engineered 2026-07)
+#
+# Protocol (EC mailbox, ACPI EC ports via ec_probe):
+#   set fan N duty D : 0xF9=N  0xFA=D  0xF8=0xC1  (doorbell last)
+#   fan N -> auto    : 0xF9=0xFF 0xFA=N 0xF8=0xC1
+# Registers: DUT1=0xCE DUT2=0xCF  tach1=0xD0-D1 tach2=0xD2-D3 (16-bit BE period)
+#            CPU temp=0x07  GPU temp=0x0A     RPM ~= 2156220 / tach_period
+set -euo pipefail
+
+EP=/usr/bin/ec_probe
+STATE=/run/gfan.mode
+
+die() { echo "gfan: $*" >&2; exit 1; }
+
+[ -x "$EP" ] || die "ec_probe not found (nbfc-linux package)"
+if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+
+MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
+
+model_check() { # gate WRITE commands on supported hardware (reads are harmless)
+  [ "${GFAN_UNSAFE:-0}" = "1" ] && return 0
+  case "$VENDOR" in
+    GIGABYTE*|Gigabyte*) ;;
+    *) die "vendor '$VENDOR' unsupported — verified on Gigabyte G6 KF only. GFAN_UNSAFE=1 gfan ... to override (risky)." ;;
+  esac
+  case "$MODEL" in
+    "G6 KF") ;;  # verified live on this machine
+    G5*|G6*|G7*)
+      echo "gfan: note: '$MODEL' untested (verified on G6 KF; same Clevo platform expected)." >&2 ;;
+    *) die "model '$MODEL' unsupported — verified on Gigabyte G6 KF only. GFAN_UNSAFE=1 gfan ... to override (risky)." ;;
+  esac
+}
+
+revert_auto() {
+  auto_fan 1; sleep 0.3; auto_fan 2; rm -f "$STATE"
+  die "$1 Reverted to automatic."
+}
+
+verify_or_revert() { # $1=pct1 $2=pct2 — safety net for unknown models.
+  # The EC ramps duty gradually (downward ~11/s), so poll until converged;
+  # revert only if duty stops moving while still far from target.
+  local d1=$(( $1 * 255 / 100 )) d2=$(( $2 * 255 / 100 ))
+  local i g1 g2 e1 e2 last1=-99 last2=-99 strikes=0
+  for i in $(seq 1 50); do  # up to ~25s (full-range downward glide)
+    sleep 0.5
+    g1=$(rd 0xCE); g2=$(rd 0xCF)
+    e1=$(( g1 > d1 ? g1 - d1 : d1 - g1 ))
+    e2=$(( g2 > d2 ? g2 - d2 : d2 - g2 ))
+    [ "$e1" -le 10 ] && [ "$e2" -le 10 ] && return 0   # converged
+    if [ "$i" -ge 3 ]; then
+      local m1=$(( g1 > last1 ? g1 - last1 : last1 - g1 ))
+      local m2=$(( g2 > last2 ? g2 - last2 : last2 - g2 ))
+      if [ "$m1" -le 1 ] && [ "$m2" -le 1 ]; then
+        strikes=$(( strikes + 1 ))
+        if [ "$strikes" -ge 3 ]; then  # ~1.5s of no movement, off-target
+          if [ "$e1" -le 40 ] && [ "$e2" -le 40 ]; then
+            echo "gfan: note: EC settled at $(( g1 * 100 / 255 ))%/$(( g2 * 100 / 255 ))% (firmware clamp?)" >&2
+            return 0
+          fi
+          revert_auto "EC did not accept the duty write — protocol may not match '$MODEL'."
+        fi
+      else
+        strikes=0
+      fi
+    fi
+    last1=$g1; last2=$g2
+  done
+  revert_auto "duty never converged — protocol may not match '$MODEL'."
+}
+
+rd() { "$EP" read "$1" 2>/dev/null | awk '{print $1}'; }
+
+send() { # send fan-cmd: $1=FDAT $2=FBUF
+  "$EP" write 0xF9 "$1" >/dev/null
+  "$EP" write 0xFA "$2" >/dev/null
+  "$EP" write 0xF8 0xC1 >/dev/null
+}
+
+set_fan() { # $1=fan index (1|2), $2=percent
+  local duty=$(( $2 * 255 / 100 ))
+  send "$1" "$duty"
+}
+
+auto_fan() { send 0xFF "$1"; }
+
+cpu_temp() { rd 0x07; }
+gpu_temp() { rd 0x0A; }
+
+rpm_of() { # $1=hi-byte reg, $2=lo-byte reg
+  local hi lo raw
+  hi=$(rd "$1"); lo=$(rd "$2"); raw=$(( hi * 256 + lo ))
+  if [ "$raw" -eq 0 ] || [ "$raw" -ge 65280 ]; then echo 0; else echo $(( 2156220 / raw )); fi
+}
+
+status() {
+  local d1 d2 r1 r2 mode
+  d1=$(rd 0xCE); d2=$(rd 0xCF)
+  r1=$(rpm_of 0xD0 0xD1); r2=$(rpm_of 0xD2 0xD3)
+  mode=$(cat "$STATE" 2>/dev/null || echo "auto (firmware)")
+  echo "CPU: $(cpu_temp)°C   GPU: $(gpu_temp)°C"
+  printf "Fan1 (CPU): duty %3d%%  ~%4d RPM\n" $(( d1 * 100 / 255 )) "$r1"
+  printf "Fan2 (GPU): duty %3d%%  ~%4d RPM\n" $(( d2 * 100 / 255 )) "$r2"
+  echo "Mode: $mode"
+}
+
+watch_loop() {
+  trap 'exit 0' INT
+  while true; do clear; date '+%H:%M:%S'; status; sleep 2; done
+}
+
+usage() {
+  cat <<'EOF'
+gfan — fan control for Gigabyte G6 KF
+
+Usage:
+  gfan status            show temps, duty, RPM
+  gfan watch             live status every 2s (Ctrl-C to quit)
+  gfan auto              both fans -> firmware automatic control
+  gfan max               both fans -> 100%
+  gfan <pct>             both fans -> pct% (0-100)
+  gfan <pct1> <pct2>     fan1 (CPU) -> pct1%, fan2 (GPU) -> pct2%
+  gfan <pct> --force     allow low speeds even when hot
+
+Notes:
+  * Settings reset to automatic on reboot (safe default).
+  * Low speeds (<30%) are refused while CPU >= 85°C unless --force.
+EOF
+}
+
+is_pct() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -le 100 ]; }
+
+guard() { # $1 = lowest requested pct
+  local t; t=$(cpu_temp)
+  if [ "$1" -lt 30 ] && [ "${t:-0}" -ge 85 ]; then
+    die "refusing ${1}% while CPU is ${t}°C (>=85°C). Use --force to override."
+  fi
+}
+
+main() {
+  case "${1:-}" in
+    status|"") status ;;
+    watch) watch_loop ;;
+    -h|--help|help) usage ;;
+    auto)
+      model_check
+      auto_fan 1; sleep 0.3; auto_fan 2
+      rm -f "$STATE"
+      echo "Fans restored to firmware automatic control." ;;
+    max)
+      model_check
+      set_fan 1 100; sleep 0.3; set_fan 2 100
+      verify_or_revert 100 100
+      echo "manual: fan1=100% fan2=100%" > "$STATE"
+      echo "Both fans at 100%." ;;
+    *)
+      local force=0 args=()
+      for a in "$@"; do [ "$a" = "--force" ] && force=1 || args+=("$a"); done
+      local n=${#args[@]}
+      { [ "$n" -ge 1 ] && [ "$n" -le 2 ]; } || { usage; exit 1; }
+      for p in "${args[@]}"; do is_pct "$p" || die "'$p' is not a percentage 0-100"; done
+      local p1=${args[0]} p2=${args[0]}
+      [ "$n" -eq 2 ] && p2=${args[1]}
+      model_check
+      if [ "$force" -eq 0 ]; then
+        local low=$(( p1 < p2 ? p1 : p2 )); guard "$low"
+      fi
+      set_fan 1 "$p1"; sleep 0.3; set_fan 2 "$p2"
+      verify_or_revert "$p1" "$p2"
+      echo "manual: fan1=${p1}% fan2=${p2}%" > "$STATE"
+      echo "Set: fan1 (CPU) = ${p1}%, fan2 (GPU) = ${p2}%"
+      ;;
+  esac
+}
+
+main "$@"

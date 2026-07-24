@@ -1,0 +1,138 @@
+#!/bin/bash
+# gkbd — keyboard backlight control for Gigabyte G6 KF (Clevo-ODM single-zone RGB)
+#
+# Protocol (reverse-engineered 2026-07, cross-checked with tuxedo clevo-keyboard driver):
+#   master enable : FDAT=0x0C FBUF=0x3F  doorbell FCMD=0xC4   (required once; before it, LED cmds are ignored)
+#   color         : FDAT=0x03 FBUF=BLUE FBF1=RED FBF2=GREEN doorbell FCMD=0xCA   (EC wants B,R,G order!)
+#   brightness    : FDAT=0x06 FBUF=level(0-255) doorbell FCMD=0xCA
+# Mailbox ports: FCMD=0xF8 FDAT=0xF9 FBUF=0xFA FBF1=0xFB FBF2=0xFC (doorbell written last)
+set -euo pipefail
+
+EP=/usr/bin/ec_probe
+STATE_DIR=/var/lib/gkbd
+STATE=$STATE_DIR/state
+
+die() { echo "gkbd: $*" >&2; exit 1; }
+[ -x "$EP" ] || die "ec_probe not found (nbfc-linux package)"
+if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+
+MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
+
+model_check() {
+  [ "${GKBD_UNSAFE:-0}" = "1" ] && return 0
+  case "$VENDOR" in GIGABYTE*|Gigabyte*) ;; *)
+    die "vendor '$VENDOR' unsupported — verified on Gigabyte G6 KF only. GKBD_UNSAFE=1 to override." ;;
+  esac
+  case "$MODEL" in
+    "G6 KF") ;;
+    G5*|G6*|G7*) echo "gkbd: note: '$MODEL' untested (verified on G6 KF)." >&2 ;;
+    *) die "model '$MODEL' unsupported — verified on Gigabyte G6 KF only. GKBD_UNSAFE=1 to override." ;;
+  esac
+}
+
+send() { # $1=FDAT $2=FBUF [$3=FBF1 $4=FBF2] $5=doorbell
+  "$EP" write 0xF9 "$1" >/dev/null
+  "$EP" write 0xFA "$2" >/dev/null
+  [ -n "${3:-}" ] && "$EP" write 0xFB "$3" >/dev/null
+  [ -n "${4:-}" ] && "$EP" write 0xFC "$4" >/dev/null
+  "$EP" write 0xF8 "${5:-0xCA}" >/dev/null
+}
+
+master_enable()  { send 0x0C 0x3F "" "" 0xC4; }
+master_disable() { send 0x0C 0x20 "" "" 0xC4; }
+set_color()  { master_enable; send 0x03 "$3" "$1" "$2"; }  # args R G B -> EC order B,R,G
+set_bright() { send 0x06 "$1"; }
+
+save_state() { mkdir -p "$STATE_DIR"; echo "$1 $2" > "$STATE"; }
+
+named_color() {
+  case "${1,,}" in
+    red)     echo "255 0 0" ;;
+    green)   echo "0 255 0" ;;
+    blue)    echo "0 0 200" ;;   # firmware default blue
+    white)   echo "255 255 255" ;;
+    orange)  echo "255 80 0" ;;
+    yellow)  echo "255 180 0" ;;
+    cyan)    echo "0 255 255" ;;
+    purple|violet) echo "160 0 255" ;;
+    pink)    echo "255 0 120" ;;
+    *) return 1 ;;
+  esac
+}
+
+hex_color() { # RRGGBB or #RRGGBB
+  local h="${1#\#}"
+  [[ "$h" =~ ^[0-9a-fA-F]{6}$ ]] || return 1
+  echo "$((16#${h:0:2})) $((16#${h:2:2})) $((16#${h:4:2}))"
+}
+
+usage() {
+  cat <<'EOF'
+gkbd — keyboard backlight control for Gigabyte G6 KF
+
+Usage:
+  gkbd <color>            named color: red green blue white orange yellow cyan purple pink
+  gkbd <RRGGBB>           hex color, e.g. gkbd ff6600 or gkbd '#00ff88'
+  gkbd brightness <0-100> backlight brightness percent
+  gkbd off                backlight off
+  gkbd on                 backlight on (restores saved color)
+  gkbd status             show saved state
+  gkbd apply              re-apply saved state (used by systemd at boot/resume)
+
+Colors reset at reboot; the gkbd-restore service re-applies your last setting.
+EOF
+}
+
+apply_state() {
+  [ -f "$STATE" ] || { echo "gkbd: no saved state yet"; return 0; }
+  read -r rgb_r rgb_g rgb_b bright < <(awk '{print $1, $2, $3, $4}' "$STATE")
+  master_enable
+  set_bright "${bright:-255}"
+  send 0x03 "$rgb_b" "$rgb_r" "$rgb_g"
+}
+
+main() {
+  case "${1:-}" in
+    ""|-h|--help|help) usage ;;
+    status)
+      if [ -f "$STATE" ]; then
+        read -r r g b br < "$STATE" 2>/dev/null || true
+        echo "saved: R=$r G=$g B=$b brightness=$((${br:-255} * 100 / 255))%"
+      else
+        echo "no saved state (firmware default blue)"
+      fi ;;
+    apply) model_check; apply_state ;;
+    off) model_check; set_bright 0; echo "Backlight off." ;;
+    on)
+      model_check
+      if [ -f "$STATE" ]; then apply_state; else master_enable; set_bright 255; fi
+      echo "Backlight on." ;;
+    brightness)
+      model_check
+      local p="${2:-}"
+      [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -le 100 ] || die "brightness needs 0-100"
+      local lvl=$(( p * 255 / 100 ))
+      master_enable; set_bright "$lvl"
+      if [ -f "$STATE" ]; then
+        read -r r g b _ < "$STATE"; save_state "$r $g $b" "$lvl"
+      else
+        save_state "0 0 200" "$lvl"
+      fi
+      echo "Brightness ${p}%." ;;
+    *)
+      model_check
+      local rgb
+      rgb=$(named_color "$1") || rgb=$(hex_color "$1") || die "unknown color '$1' (try: gkbd help)"
+      read -r r g b <<< "$rgb"
+      local br=255
+      [ -f "$STATE" ] && br=$(awk '{print $4}' "$STATE")
+      master_enable
+      set_bright "${br:-255}"
+      set_color "$r" "$g" "$b"
+      save_state "$r $g $b" "${br:-255}"
+      echo "Keyboard color set: R=$r G=$g B=$b" ;;
+  esac
+}
+
+main "$@"
