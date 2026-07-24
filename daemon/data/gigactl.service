@@ -6,6 +6,14 @@ After=multi-user.target
 [Service]
 Type=dbus
 BusName=io.github.smairio.gigactl
+# The daemon picks its EC backend once, at startup, and prefers the ec_sys
+# debugfs file because the kernel serialises each transaction there; the
+# /dev/port fallback races the kernel's own EC driver. modules-load.d only fires
+# at boot, so without this an install — or any start before that first boot —
+# would come up on the fallback and stay there. Optional (the leading '-') so a
+# kernel without the module still starts the daemon. write_support=1 comes from
+# modprobe.d/gigactl.conf.
+ExecStartPre=-/sbin/modprobe ec_sys
 ExecStart=/usr/bin/gigactld
 Restart=on-failure
 RestartSec=2

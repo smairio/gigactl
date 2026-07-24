@@ -7,6 +7,12 @@ case "$1" in
         # keyboard colour. Kept across a plain remove, dropped on purge.
         rm -rf /var/lib/gigactl
         ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
 esac
 
 #DEBHELPER#

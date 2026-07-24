@@ -1,9 +1,13 @@
 #!/usr/bin/make -f
 # gigactl is an application, not an importable library, so it is installed the
 # way Debian Python Policy prescribes for private modules: the module tree goes
-# to /usr/lib/gigactl and dh_python3 is pointed at that directory. No pybuild —
-# there is no upstream build system to drive, and nothing belongs in
-# dist-packages.
+# to a private directory and dh_python3 is pointed at it. No pybuild — there is
+# no upstream build system to drive, and nothing belongs in dist-packages.
+
+# Where the module tree lives. Declared here once; debian/install's destinations,
+# debian/links and debian/bin/launcher must agree with it, and
+# packaging/test_packaging.py reads this line and asserts they do.
+PRIVATE_DIR = /usr/lib/gigactl
 
 # hicolor raster sizes rendered from design/icon.svg at build time, so the SVG
 # stays the single source of the icon.
@@ -31,9 +35,12 @@ override_dh_clean:
 	dh_clean
 
 # A malformed desktop entry is invisible until a login fails to autostart the
-# tray, so let the build catch it instead.
+# tray, so let the build catch it instead. An override body runs unconditionally,
+# so honour nocheck ourselves (Policy 4.9.1) — dh_auto_test would have.
 override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	desktop-file-validate gui/data/*.desktop
+endif
 
 override_dh_python3:
-	dh_python3 /usr/lib/gigactl
+	dh_python3 $(PRIVATE_DIR)

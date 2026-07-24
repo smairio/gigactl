@@ -43,8 +43,12 @@ check_hardware() {
     esac
 }
 
+# Only on a first install. Checking on upgrade too would strand any machine that
+# needed GIGACTL_FORCE_INSTALL: the variable is not persisted anywhere, and
+# unattended-upgrades has no way to supply it, so every later upgrade would fail
+# on hardware the admin already decided about.
 case "$1" in
-    install|upgrade) check_hardware ;;
+    install) check_hardware ;;
 esac
 
 #DEBHELPER#

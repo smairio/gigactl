@@ -14,7 +14,7 @@ supersede_legacy_gkbd() {
     legacy_hook=/lib/systemd/system-sleep/gkbd
     [ -e "$legacy_unit" ] || [ -e "$legacy_hook" ] || return 0
     echo "gigactl: superseding the standalone gkbd keyboard restore; the daemon" \
-         "does this now."
+         "does this now." >&2
     if [ -d /run/systemd/system ]; then
         systemctl disable --now gkbd-restore.service >/dev/null 2>&1 || true
     fi
@@ -33,7 +33,7 @@ warn_about_local_copies() {
         [ -e "$stale" ] || continue
         echo "gigactl: warning: $stale comes earlier on PATH than the packaged" \
              "/usr/bin/${stale##*/} and will be used instead. Remove the" \
-             "source install with 'sudo ./install.sh --uninstall'."
+             "source install with 'sudo ./install.sh --uninstall'." >&2
     done
 }
 
@@ -41,6 +41,12 @@ case "$1" in
     configure)
         supersede_legacy_gkbd
         warn_about_local_copies
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure|triggered)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
         ;;
 esac
 

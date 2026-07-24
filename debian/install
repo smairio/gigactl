@@ -4,8 +4,9 @@ daemon/gigactld/*.py                            usr/lib/gigactl/gigactld
 gui/gigactl_gui/*.py                            usr/lib/gigactl/gigactl_gui
 
 # --- entry points ------------------------------------------------------------
-debian/bin/gigactld                             usr/bin
-debian/bin/gigactl-gui                          usr/bin
+# /usr/bin/gigactld and /usr/bin/gigactl-gui are symlinks to this one script
+# (debian/links); it dispatches on the name it was invoked under.
+debian/bin/launcher                             usr/lib/gigactl
 gfan                                            usr/bin
 gkbd                                            usr/bin
 

@@ -1,0 +1,4 @@
+# Both entry points are the same script; it dispatches on the name it was invoked
+# under, so there is one launcher rather than two near-identical copies.
+usr/lib/gigactl/launcher usr/bin/gigactld
+usr/lib/gigactl/launcher usr/bin/gigactl-gui

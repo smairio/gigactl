@@ -1,0 +1,37 @@
+#!/usr/bin/python3
+"""The packaged entry point behind both /usr/bin/gigactld and /usr/bin/gigactl-gui.
+
+Those two are symlinks to this single file (debian/links), and the name it was
+invoked under decides which program runs — so the private-directory dance exists
+in exactly one place rather than once per entry point.
+
+/usr/lib/gigactl is a *private* module directory (Debian Python Policy: an
+application's modules do not belong in dist-packages), so it has to go on the
+path explicitly. Python points sys.path[0] at the directory of the symlink that
+was run, which is /usr/bin, not at this file's own directory.
+"""
+import os
+import sys
+from importlib import import_module
+
+PRIVATE_DIR = "/usr/lib/gigactl"
+
+# invoked name -> the package whose __main__.main() it runs. Must agree with the
+# [project.scripts] entry points in daemon/pyproject.toml and gui/pyproject.toml;
+# packaging/test_packaging.py asserts that it does.
+PROGRAMS = {"gigactld": "gigactld", "gigactl-gui": "gigactl_gui"}
+
+
+def main() -> int:
+    invoked = os.path.basename(sys.argv[0])
+    package = PROGRAMS.get(invoked)
+    if package is None:
+        print(f"{invoked}: not a gigactl entry point — expected one of "
+              f"{', '.join(sorted(PROGRAMS))}", file=sys.stderr)
+        return 2
+    sys.path.insert(0, PRIVATE_DIR)
+    return import_module(f"{package}.__main__").main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
