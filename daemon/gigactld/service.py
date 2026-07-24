@@ -15,7 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
-from . import authz, curve, fans, state  # noqa: E402
+from . import authz, curve, fans, keyboard, state  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
 
 _ERR = "io.github.smairio.gigactl.Error"
@@ -39,6 +39,17 @@ INTROSPECTION_XML = f"""
       <arg name="which"  type="s"     direction="in"/>
       <arg name="points" type="a(uu)" direction="in"/>
       <arg name="linked" type="b"     direction="in"/>
+    </method>
+    <method name="SetKeyboardColor">
+      <arg name="r" type="u" direction="in"/>
+      <arg name="g" type="u" direction="in"/>
+      <arg name="b" type="u" direction="in"/>
+    </method>
+    <method name="SetKeyboardBrightness">
+      <arg name="percent" type="u" direction="in"/>
+    </method>
+    <method name="SetKeyboardEnabled">
+      <arg name="on" type="b" direction="in"/>
     </method>
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
@@ -149,16 +160,24 @@ class Daemon:
                 self._set_profile(sender, params, invocation)
             elif method == "SetCurve":
                 self._set_curve(sender, params, invocation)
+            elif method == "SetKeyboardColor":
+                self._set_keyboard_color(sender, params, invocation)
+            elif method == "SetKeyboardBrightness":
+                self._set_keyboard_brightness(sender, params, invocation)
+            elif method == "SetKeyboardEnabled":
+                self._set_keyboard_enabled(sender, params, invocation)
             else:
                 invocation.return_dbus_error(f"{_ERR}.UnknownMethod", method)
         except Exception as exc:  # never let an exception escape into GLib
             invocation.return_dbus_error(f"{_ERR}.Failed", str(exc))
 
-    def _authorized(self, sender, invocation) -> bool:
-        if self.authorizer.check(sender, authz.ACTION_CONTROL_FANS):
+    def _authorized(self, sender, invocation,
+                    action: str = authz.ACTION_CONTROL_FANS,
+                    what: str = "the fans") -> bool:
+        if self.authorizer.check(sender, action):
             return True
         invocation.return_dbus_error(
-            f"{_ERR}.NotAuthorized", "not authorized to control the fans")
+            f"{_ERR}.NotAuthorized", f"not authorized to control {what}")
         return False
 
     def _set_fan_duty(self, sender, params, invocation) -> None:
@@ -278,6 +297,35 @@ class Daemon:
             return
         self._apply_now()
         self._persist()
+        invocation.return_value(None)
+
+    # --- keyboard methods ----------------------------------------------------
+    def _kbd_authorized(self, sender, invocation) -> bool:
+        return self._authorized(sender, invocation,
+                                authz.ACTION_CONTROL_KEYBOARD, "the keyboard")
+
+    def _set_keyboard_color(self, sender, params, invocation) -> None:
+        r, g, b = params.unpack()
+        if not self._kbd_authorized(sender, invocation):
+            return
+        keyboard.set_color(self.ec, r, g, b)
+        invocation.return_value(None)
+
+    def _set_keyboard_brightness(self, sender, params, invocation) -> None:
+        (percent,) = params.unpack()
+        if not 0 <= percent <= 100:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", f"bad percent {percent}")
+            return
+        if not self._kbd_authorized(sender, invocation):
+            return
+        keyboard.set_brightness(self.ec, percent)
+        invocation.return_value(None)
+
+    def _set_keyboard_enabled(self, sender, params, invocation) -> None:
+        (on,) = params.unpack()
+        if not self._kbd_authorized(sender, invocation):
+            return
+        keyboard.set_enabled(self.ec, on)
         invocation.return_value(None)
 
     def stop(self) -> None:

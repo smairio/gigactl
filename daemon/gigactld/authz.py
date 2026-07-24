@@ -14,6 +14,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 ACTION_CONTROL_FANS = "io.github.smairio.gigactl.control-fans"
+ACTION_CONTROL_KEYBOARD = "io.github.smairio.gigactl.control-keyboard"
 
 _PK_NAME = "org.freedesktop.PolicyKit1"
 _PK_PATH = "/org/freedesktop/PolicyKit1/Authority"
