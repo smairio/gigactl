@@ -7,9 +7,9 @@ gigactl (1.0.0) noble; urgency=medium
     and gkbd command line tools.
   * Supersedes the standalone gkbd-restore.service and its system-sleep hook:
     the daemon now owns keyboard restore, from /var/lib/gigactl/state.json.
-  * Known limitation: gfan and gkbd still drive the Embedded Controller
-    directly and need ec_probe (nbfc-linux), which apt cannot resolve. With the
-    daemon running they can also fight it for the EC. Both are fixed by making
-    them daemon clients — see issue #17.
+  * gfan and gkbd route through the daemon whenever it is running, so they need
+    neither root nor ec_probe in normal use, and cannot compete with it for the
+    Embedded Controller. Without a daemon they write the EC directly as before,
+    which does still need ec_probe (nbfc-linux, not in the apt archive).
 
  -- khalil Smairi <smairio98@gmail.com>  Fri, 24 Jul 2026 22:00:00 +0100

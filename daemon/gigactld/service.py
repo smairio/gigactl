@@ -61,6 +61,12 @@ INTROSPECTION_XML = f"""
     </signal>
     <property name="DaemonVersion" type="s" access="read"/>
     <property name="ActiveProfile" type="s" access="read"/>
+    <!-- The same six numbers as the Telemetry signal, read on demand. The signal
+         is for anything that stays running; this is for one-shot readers such as
+         `gfan status`, which cannot wait out a poll interval. Deliberately never
+         announced via PropertiesChanged — a client that wants a stream wants the
+         signal, not a property notification every two seconds. -->
+    <property name="Telemetry" type="(uuuuuu)" access="read"/>
     <!-- (enabled, r, g, b, brightness_pct) — what the GUI shows as selected -->
     <property name="KeyboardState" type="(buuuu)" access="read"/>
     <!-- (linked, cpu_points, gpu_points) — the shape the curve editor loads.
@@ -219,6 +225,15 @@ class Daemon:
             return GLib.Variant("s", __version__)
         if prop == "ActiveProfile":
             return GLib.Variant("s", self.engine.profile)
+        if prop == "Telemetry":
+            try:
+                t = read_telemetry(self.ec)
+            except Exception as exc:  # reached from the GLib dispatcher
+                print(f"gigactld: telemetry read failed: {exc}", flush=True)
+                return None
+            return GLib.Variant("(uuuuuu)",
+                                (t.cpu_temp, t.gpu_temp, t.fan1_rpm, t.fan2_rpm,
+                                 t.fan1_duty_pct, t.fan2_duty_pct))
         if prop == "KeyboardState":
             return _keyboard_variant(self.keyboard)
         if prop == "Curves":

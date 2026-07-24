@@ -1,6 +1,18 @@
 #!/bin/bash
 # gkbd — keyboard backlight control for Gigabyte G6 KF (Clevo-ODM single-zone RGB)
 #
+# Two modes, chosen automatically:
+#
+#   daemon — the gigactl daemon owns io.github.smairio.gigactl, so it is the single
+#     writer of the EC *and* the single owner of the saved backlight state
+#     (/var/lib/gigactl/state.json, re-applied at boot and on resume). gkbd becomes
+#     an unprivileged D-Bus client: no root, no ec_probe, no register writes — and
+#     it deliberately does not touch its own store, because two stores for one
+#     backlight is how a stale colour wins a race.
+#   direct — no daemon, so gkbd drives the EC itself as it always has, keeping its
+#     own store and holding /run/lock/gigactl-ec.lock so concurrent invocations
+#     serialise.
+#
 # Protocol (reverse-engineered 2026-07, cross-checked with tuxedo clevo-keyboard driver):
 #   master enable : FDAT=0x0C FBUF=0x3F  doorbell FCMD=0xC4   (required once; before it, LED cmds are ignored)
 #   color         : FDAT=0x03 FBUF=BLUE FBF1=RED FBF2=GREEN doorbell FCMD=0xCA   (EC wants B,R,G order!)
@@ -8,13 +20,19 @@
 # Mailbox ports: FCMD=0xF8 FDAT=0xF9 FBUF=0xFA FBF1=0xFB FBF2=0xFC (doorbell written last)
 set -euo pipefail
 
-EP=/usr/bin/ec_probe
-STATE_DIR=/var/lib/gkbd
+# Overridable only so cli/ can exercise both modes as an ordinary user in a tmp
+# directory; the defaults are the real locations.
+EP=${GKBD_EC_PROBE:-/usr/bin/ec_probe}
+STATE_DIR=${GKBD_STATE_DIR:-/var/lib/gkbd}
 STATE=$STATE_DIR/state
+LOCK=${GIGACTL_EC_LOCK:-/run/lock/gigactl-ec.lock}
+LOCK_WAIT=${GIGACTL_LOCK_WAIT:-10}
+
+BUS=io.github.smairio.gigactl
+OBJ=/io/github/smairio/gigactl
+IFACE=$BUS.Control
 
 die() { echo "gkbd: $*" >&2; exit 1; }
-[ -x "$EP" ] || die "ec_probe not found (nbfc-linux package)"
-if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
 
 MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
 VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
@@ -31,6 +49,58 @@ model_check() {
   esac
 }
 
+# --- which mode ---------------------------------------------------------------
+
+daemon_owns_the_ec() {
+  command -v busctl >/dev/null 2>&1 || return 1
+  [ "$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus NameHasOwner s "$BUS" 2>/dev/null)" = "b true" ]
+}
+
+# Both modes implement the same verbs as <mode>_<verb>; this is the only place the
+# choice is acted on.
+op() { "${MODE}_$1" "${@:2}"; }
+
+# --- daemon mode --------------------------------------------------------------
+
+call() { # $1=method, rest = signature and arguments
+  local method=$1 out; shift
+  if ! out=$(busctl --system call "$BUS" "$OBJ" "$IFACE" "$method" "$@" 2>&1); then
+    die "the daemon refused $method: ${out#Call failed: }"
+  fi
+}
+
+daemon_set_color() { call SetKeyboardColor uuu "$1" "$2" "$3"; }
+
+# The daemon's API speaks percent; only the EC wants a 0-255 level.
+daemon_set_brightness() { call SetKeyboardBrightness u "$1"; }
+
+daemon_set_enabled() { call SetKeyboardEnabled b "$1"; }
+
+daemon_status() {
+  local out enabled r g b pct
+  out=$(busctl --system get-property "$BUS" "$OBJ" "$IFACE" KeyboardState 2>/dev/null) \
+    || die "could not read the keyboard state from the daemon"
+  read -r _type enabled r g b pct <<<"$out"
+  [ -n "${pct:-}" ] || die "unexpected keyboard state from the daemon: $out"
+  echo "daemon: R=$r G=$g B=$b brightness=${pct}% ($([ "$enabled" = true ] && echo on || echo off))"
+}
+
+daemon_apply() {
+  # The legacy gkbd-restore.service and system-sleep hook used to call this. The
+  # daemon re-applies its own saved state at boot and on resume, so there is
+  # nothing to do — and doing it here would write a second, older value.
+  echo "gkbd: the gigactl daemon restores the backlight itself; nothing to apply."
+}
+
+# --- direct mode --------------------------------------------------------------
+
+lock_ec() { # serialise a whole write sequence against other writers
+  exec 9>"$LOCK" || die "cannot open the EC lock $LOCK"
+  flock -w "$LOCK_WAIT" 9 || \
+    die "another gigactl EC writer is holding the lock $LOCK — try again."
+}
+
 send() { # $1=FDAT $2=FBUF [$3=FBF1 $4=FBF2] $5=doorbell
   "$EP" write 0xF9 "$1" >/dev/null
   "$EP" write 0xFA "$2" >/dev/null
@@ -40,11 +110,77 @@ send() { # $1=FDAT $2=FBUF [$3=FBF1 $4=FBF2] $5=doorbell
 }
 
 master_enable()  { send 0x0C 0x3F "" "" 0xC4; }
-master_disable() { send 0x0C 0x20 "" "" 0xC4; }
-set_color()  { master_enable; send 0x03 "$3" "$1" "$2"; }  # args R G B -> EC order B,R,G
+set_color()  { send 0x03 "$3" "$1" "$2"; }  # args R G B -> EC order B,R,G
 set_bright() { send 0x06 "$1"; }
 
 save_state() { mkdir -p "$STATE_DIR"; echo "$1 $2" > "$STATE"; }
+
+saved_brightness() { # the level to keep when only the colour changes
+  local br=255
+  [ -f "$STATE" ] && br=$(awk '{print $4}' "$STATE")
+  echo "${br:-255}"
+}
+
+direct_set_color() { # $1=R $2=G $3=B
+  local br; br=$(saved_brightness)
+  lock_ec
+  master_enable
+  set_bright "$br"
+  set_color "$1" "$2" "$3"
+  save_state "$1 $2 $3" "$br"
+}
+
+direct_set_brightness() { # $1=percent
+  local lvl=$(( $1 * 255 / 100 )) r g b
+  lock_ec
+  master_enable
+  set_bright "$lvl"
+  if [ -f "$STATE" ]; then
+    read -r r g b _ < "$STATE"; save_state "$r $g $b" "$lvl"
+  else
+    save_state "0 0 200" "$lvl"
+  fi
+}
+
+direct_set_enabled() { # $1=true|false
+  lock_ec
+  if [ "$1" = true ]; then
+    if [ -f "$STATE" ]; then
+      local r g b br
+      read -r r g b br < "$STATE"
+      master_enable
+      set_bright "${br:-255}"
+      set_color "$r" "$g" "$b"
+    else
+      master_enable
+      set_bright 255
+    fi
+  else
+    set_bright 0
+  fi
+}
+
+direct_status() {
+  if [ -f "$STATE" ]; then
+    local r g b br
+    read -r r g b br < "$STATE" 2>/dev/null || true
+    echo "saved: R=$r G=$g B=$b brightness=$((${br:-255} * 100 / 255))%"
+  else
+    echo "no saved state (firmware default blue)"
+  fi
+}
+
+direct_apply() {
+  [ -f "$STATE" ] || { echo "gkbd: no saved state yet"; return 0; }
+  local r g b br
+  read -r r g b br < "$STATE"
+  lock_ec
+  master_enable
+  set_bright "${br:-255}"
+  set_color "$r" "$g" "$b"
+}
+
+# --- shared -------------------------------------------------------------------
 
 named_color() {
   case "${1,,}" in
@@ -77,60 +213,46 @@ Usage:
   gkbd brightness <0-100> backlight brightness percent
   gkbd off                backlight off
   gkbd on                 backlight on (restores saved color)
-  gkbd status             show saved state
-  gkbd apply              re-apply saved state (used by systemd at boot/resume)
+  gkbd status             show current state
+  gkbd apply              re-apply saved state (legacy; the daemon does this itself)
 
-Colors reset at reboot; the gkbd-restore service re-applies your last setting.
+With the gigactl daemon running, gkbd drives it over D-Bus, needs no root, and the
+daemon is what remembers your colour across reboot and suspend. Without it, gkbd
+writes the EC directly, keeps its own saved state and re-runs itself under sudo.
 EOF
-}
-
-apply_state() {
-  [ -f "$STATE" ] || { echo "gkbd: no saved state yet"; return 0; }
-  read -r rgb_r rgb_g rgb_b bright < <(awk '{print $1, $2, $3, $4}' "$STATE")
-  master_enable
-  set_bright "${bright:-255}"
-  send 0x03 "$rgb_b" "$rgb_r" "$rgb_g"
 }
 
 main() {
   case "${1:-}" in
-    ""|-h|--help|help) usage ;;
-    status)
-      if [ -f "$STATE" ]; then
-        read -r r g b br < "$STATE" 2>/dev/null || true
-        echo "saved: R=$r G=$g B=$b brightness=$((${br:-255} * 100 / 255))%"
-      else
-        echo "no saved state (firmware default blue)"
-      fi ;;
-    apply) model_check; apply_state ;;
-    off) model_check; set_bright 0; echo "Backlight off." ;;
-    on)
-      model_check
-      if [ -f "$STATE" ]; then apply_state; else master_enable; set_bright 255; fi
-      echo "Backlight on." ;;
+    ""|-h|--help|help) usage; return 0 ;;
+  esac
+
+  if daemon_owns_the_ec; then
+    MODE=daemon
+  else
+    MODE=direct
+    # Only the direct path needs the tool and the privileges to use it.
+    [ -x "$EP" ] || die "ec_probe not found (nbfc-linux package), and the gigactl daemon is not running"
+    if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+  fi
+
+  case "$1" in
+    status) op status ;;
+    apply) model_check; op apply ;;
+    off) model_check; op set_enabled false; echo "Backlight off." ;;
+    on) model_check; op set_enabled true; echo "Backlight on." ;;
     brightness)
       model_check
       local p="${2:-}"
       [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -le 100 ] || die "brightness needs 0-100"
-      local lvl=$(( p * 255 / 100 ))
-      master_enable; set_bright "$lvl"
-      if [ -f "$STATE" ]; then
-        read -r r g b _ < "$STATE"; save_state "$r $g $b" "$lvl"
-      else
-        save_state "0 0 200" "$lvl"
-      fi
+      op set_brightness "$p"
       echo "Brightness ${p}%." ;;
     *)
-      model_check
-      local rgb
+      local rgb r g b
       rgb=$(named_color "$1") || rgb=$(hex_color "$1") || die "unknown color '$1' (try: gkbd help)"
       read -r r g b <<< "$rgb"
-      local br=255
-      [ -f "$STATE" ] && br=$(awk '{print $4}' "$STATE")
-      master_enable
-      set_bright "${br:-255}"
-      set_color "$r" "$g" "$b"
-      save_state "$r $g $b" "${br:-255}"
+      model_check
+      op set_color "$r" "$g" "$b"
       echo "Keyboard color set: R=$r G=$g B=$b" ;;
   esac
 }

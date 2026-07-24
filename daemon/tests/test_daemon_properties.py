@@ -37,6 +37,27 @@ def test_keyboard_state_property_falls_back_to_firmware_default(make_daemon):
     assert _get(d, "KeyboardState").unpack() == (True, 0, 0, 255, 100)
 
 
+def test_telemetry_property_reports_the_same_reading_as_the_signal(make_daemon):
+    """The signal is for streaming; the property is for one-shot readers — the
+    CLI asks once and exits, and cannot wait out a poll interval. Both must
+    describe the same hardware."""
+    d = make_daemon()
+    d.ec.regs.update({0x07: 71, 0x0A: 64, 0xCE: 128, 0xCF: 64})
+    assert _get(d, "Telemetry").unpack() == (71, 64, 0, 0, 50, 25)
+
+
+def test_telemetry_property_survives_an_unreadable_ec(make_daemon):
+    """A raising getter would take the GLib dispatcher down; None makes GDBus
+    answer the caller with an error instead."""
+    d = make_daemon()
+
+    def boom(_off):
+        raise OSError("EC gone")
+
+    d.ec.read_u8 = boom
+    assert _get(d, "Telemetry") is None
+
+
 def test_unknown_property_is_none(make_daemon):
     assert _get(make_daemon(), "NoSuchProperty") is None
 

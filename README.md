@@ -11,6 +11,11 @@ Gigabyte ships no Linux software for its G-series laptops. The firmware fan curv
 | `gfan` | Manual fan speed (per-fan %), live temps + RPM, instant return to firmware auto |
 | `gkbd` | Keyboard backlight color (single-zone RGB), brightness, on/off — persists across reboot and suspend |
 
+Both tools check for the `gigactl` daemon first. When it is running they drive it
+over D-Bus — no `sudo`, no `ec_probe`, and no risk of two writers taking turns on
+one EC mailbox. With no daemon they write the EC themselves as they always have,
+serialising on the same lock the daemon uses.
+
 ## Supported hardware
 
 | Model | Status |
@@ -44,6 +49,7 @@ To build it yourself:
 ```bash
 sudo apt install debhelper dh-python librsvg2-bin desktop-file-utils
 python3 -m pytest packaging -q      # checks debian/ against the source tree
+python3 -m pytest cli -q            # drives gfan/gkbd against stub busctl/ec_probe
 dpkg-buildpackage -us -uc -b        # the .deb lands in the parent directory
 ```
 

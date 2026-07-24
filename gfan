@@ -1,6 +1,17 @@
 #!/bin/bash
 # gfan — fan control for Gigabyte G6 KF (Clevo-ODM EC, reverse-engineered 2026-07)
 #
+# Two modes, chosen automatically:
+#
+#   daemon — the gigactl daemon owns io.github.smairio.gigactl, which makes it the
+#     single writer of the EC. gfan becomes an unprivileged D-Bus client of it: no
+#     root (polkit lets the console user do this without a password), no ec_probe,
+#     and no chance of the two interleaving mailbox sequences. It never touches a
+#     register in this mode.
+#   direct — no daemon, so gfan drives the EC itself as it always has, keeping its
+#     safety guards and holding /run/lock/gigactl-ec.lock — the same lock the
+#     daemon takes — so concurrent invocations serialise instead of interleaving.
+#
 # Protocol (EC mailbox, ACPI EC ports via ec_probe):
 #   set fan N duty D : 0xF9=N  0xFA=D  0xF8=0xC1  (doorbell last)
 #   fan N -> auto    : 0xF9=0xFF 0xFA=N 0xF8=0xC1
@@ -8,13 +19,18 @@
 #            CPU temp=0x07  GPU temp=0x0A     RPM ~= 2156220 / tach_period
 set -euo pipefail
 
-EP=/usr/bin/ec_probe
-STATE=/run/gfan.mode
+# Overridable only so cli/ can exercise both modes as an ordinary user in a tmp
+# directory; the defaults are the real locations.
+EP=${GFAN_EC_PROBE:-/usr/bin/ec_probe}
+STATE=${GFAN_STATE:-/run/gfan.mode}
+LOCK=${GIGACTL_EC_LOCK:-/run/lock/gigactl-ec.lock}
+LOCK_WAIT=${GIGACTL_LOCK_WAIT:-10}
+
+BUS=io.github.smairio.gigactl
+OBJ=/io/github/smairio/gigactl
+IFACE=$BUS.Control
 
 die() { echo "gfan: $*" >&2; exit 1; }
-
-[ -x "$EP" ] || die "ec_probe not found (nbfc-linux package)"
-if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
 
 MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
 VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
@@ -32,6 +48,81 @@ model_check() { # gate WRITE commands on supported hardware (reads are harmless)
     *) die "model '$MODEL' unsupported — verified on Gigabyte G6 KF only. GFAN_UNSAFE=1 gfan ... to override (risky)." ;;
   esac
 }
+
+# --- which mode ---------------------------------------------------------------
+
+daemon_owns_the_ec() {
+  command -v busctl >/dev/null 2>&1 || return 1
+  [ "$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus NameHasOwner s "$BUS" 2>/dev/null)" = "b true" ]
+}
+
+# Both modes implement the same verbs as <mode>_<verb>; this is the only place the
+# choice is acted on, so no operation can accidentally reach for the wrong one.
+op() { "${MODE}_$1" "${@:2}"; }
+
+# --- daemon mode --------------------------------------------------------------
+
+call() { # $1=method, rest = signature and arguments
+  local method=$1 out; shift
+  if ! out=$(busctl --system call "$BUS" "$OBJ" "$IFACE" "$method" "$@" 2>&1); then
+    die "the daemon refused $method: ${out#Call failed: }"
+  fi
+}
+
+prop() { busctl --system get-property "$BUS" "$OBJ" "$IFACE" "$1" 2>/dev/null; }
+
+# The Telemetry property is the signal's six numbers, read on demand — a one-shot
+# command cannot wait out the daemon's poll interval.
+read_telemetry() { # sets T_CPU T_GPU T_RPM1 T_RPM2 T_DUTY1 T_DUTY2
+  local out
+  out=$(prop Telemetry) || die "could not read telemetry from the daemon"
+  read -r _type T_CPU T_GPU T_RPM1 T_RPM2 T_DUTY1 T_DUTY2 <<<"$out"
+  [ -n "${T_DUTY2:-}" ] || die "unexpected telemetry from the daemon: $out"
+}
+
+daemon_cpu_temp() { read_telemetry; echo "$T_CPU"; }
+
+daemon_set_duties() { # $1=fan1 pct $2=fan2 pct
+  call SetFanDuty uu 1 "$1"
+  call SetFanDuty uu 2 "$2"
+}
+
+daemon_restore_auto() { call RestoreFirmware; }
+
+daemon_status() {
+  local profile
+  read_telemetry
+  profile=$(prop ActiveProfile) || profile='s "unknown"'
+  profile=${profile#s \"}; profile=${profile%\"}
+  echo "CPU: ${T_CPU}°C   GPU: ${T_GPU}°C"
+  printf "Fan1 (CPU): duty %3d%%  ~%4d RPM\n" "$T_DUTY1" "$T_RPM1"
+  printf "Fan2 (GPU): duty %3d%%  ~%4d RPM\n" "$T_DUTY2" "$T_RPM2"
+  echo "Mode: gigactl daemon, profile $profile"
+}
+
+# --- direct mode --------------------------------------------------------------
+
+lock_ec() { # serialise a whole write-and-verify sequence against other writers
+  exec 9>"$LOCK" || die "cannot open the EC lock $LOCK"
+  flock -w "$LOCK_WAIT" 9 || \
+    die "another gigactl EC writer is holding the lock $LOCK — try again."
+}
+
+rd() { "$EP" read "$1" 2>/dev/null | awk '{print $1}'; }
+
+send() { # send fan-cmd: $1=FDAT $2=FBUF
+  "$EP" write 0xF9 "$1" >/dev/null
+  "$EP" write 0xFA "$2" >/dev/null
+  "$EP" write 0xF8 0xC1 >/dev/null
+}
+
+set_fan() { # $1=fan index (1|2), $2=percent
+  local duty=$(( $2 * 255 / 100 ))
+  send "$1" "$duty"
+}
+
+auto_fan() { send 0xFF "$1"; }
 
 revert_auto() {
   auto_fan 1; sleep 0.3; auto_fan 2; rm -f "$STATE"
@@ -70,23 +161,7 @@ verify_or_revert() { # $1=pct1 $2=pct2 — safety net for unknown models.
   revert_auto "duty never converged — protocol may not match '$MODEL'."
 }
 
-rd() { "$EP" read "$1" 2>/dev/null | awk '{print $1}'; }
-
-send() { # send fan-cmd: $1=FDAT $2=FBUF
-  "$EP" write 0xF9 "$1" >/dev/null
-  "$EP" write 0xFA "$2" >/dev/null
-  "$EP" write 0xF8 0xC1 >/dev/null
-}
-
-set_fan() { # $1=fan index (1|2), $2=percent
-  local duty=$(( $2 * 255 / 100 ))
-  send "$1" "$duty"
-}
-
-auto_fan() { send 0xFF "$1"; }
-
-cpu_temp() { rd 0x07; }
-gpu_temp() { rd 0x0A; }
+direct_cpu_temp() { rd 0x07; }
 
 rpm_of() { # $1=hi-byte reg, $2=lo-byte reg
   local hi lo raw
@@ -94,20 +169,35 @@ rpm_of() { # $1=hi-byte reg, $2=lo-byte reg
   if [ "$raw" -eq 0 ] || [ "$raw" -ge 65280 ]; then echo 0; else echo $(( 2156220 / raw )); fi
 }
 
-status() {
+direct_set_duties() { # $1=fan1 pct $2=fan2 pct
+  lock_ec
+  set_fan 1 "$1"; sleep 0.3; set_fan 2 "$2"
+  verify_or_revert "$1" "$2"
+  echo "manual: fan1=${1}% fan2=${2}%" > "$STATE"
+}
+
+direct_restore_auto() {
+  lock_ec
+  auto_fan 1; sleep 0.3; auto_fan 2
+  rm -f "$STATE"
+}
+
+direct_status() {
   local d1 d2 r1 r2 mode
   d1=$(rd 0xCE); d2=$(rd 0xCF)
   r1=$(rpm_of 0xD0 0xD1); r2=$(rpm_of 0xD2 0xD3)
   mode=$(cat "$STATE" 2>/dev/null || echo "auto (firmware)")
-  echo "CPU: $(cpu_temp)°C   GPU: $(gpu_temp)°C"
+  echo "CPU: $(direct_cpu_temp)°C   GPU: $(rd 0x0A)°C"
   printf "Fan1 (CPU): duty %3d%%  ~%4d RPM\n" $(( d1 * 100 / 255 )) "$r1"
   printf "Fan2 (GPU): duty %3d%%  ~%4d RPM\n" $(( d2 * 100 / 255 )) "$r2"
   echo "Mode: $mode"
 }
 
+# --- shared -------------------------------------------------------------------
+
 watch_loop() {
   trap 'exit 0' INT
-  while true; do clear; date '+%H:%M:%S'; status; sleep 2; done
+  while true; do clear; date '+%H:%M:%S'; op status; sleep 2; done
 }
 
 usage() {
@@ -124,6 +214,8 @@ Usage:
   gfan <pct> --force     allow low speeds even when hot
 
 Notes:
+  * With the gigactl daemon running, gfan drives it over D-Bus and needs no root.
+    Without it, gfan writes the EC directly and re-runs itself under sudo.
   * Settings reset to automatic on reboot (safe default).
   * Low speeds (<30%) are refused while CPU >= 85°C unless --force.
 EOF
@@ -132,7 +224,7 @@ EOF
 is_pct() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -le 100 ]; }
 
 guard() { # $1 = lowest requested pct
-  local t; t=$(cpu_temp)
+  local t; t=$(op cpu_temp)
   if [ "$1" -lt 30 ] && [ "${t:-0}" -ge 85 ]; then
     die "refusing ${1}% while CPU is ${t}°C (>=85°C). Use --force to override."
   fi
@@ -140,19 +232,28 @@ guard() { # $1 = lowest requested pct
 
 main() {
   case "${1:-}" in
-    status|"") status ;;
+    -h|--help|help) usage; return 0 ;;
+  esac
+
+  if daemon_owns_the_ec; then
+    MODE=daemon
+  else
+    MODE=direct
+    # Only the direct path needs the tool and the privileges to use it.
+    [ -x "$EP" ] || die "ec_probe not found (nbfc-linux package), and the gigactl daemon is not running"
+    if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+  fi
+
+  case "${1:-}" in
+    status|"") op status ;;
     watch) watch_loop ;;
-    -h|--help|help) usage ;;
     auto)
       model_check
-      auto_fan 1; sleep 0.3; auto_fan 2
-      rm -f "$STATE"
+      op restore_auto
       echo "Fans restored to firmware automatic control." ;;
     max)
       model_check
-      set_fan 1 100; sleep 0.3; set_fan 2 100
-      verify_or_revert 100 100
-      echo "manual: fan1=100% fan2=100%" > "$STATE"
+      op set_duties 100 100
       echo "Both fans at 100%." ;;
     *)
       local force=0 args=()
@@ -166,9 +267,7 @@ main() {
       if [ "$force" -eq 0 ]; then
         local low=$(( p1 < p2 ? p1 : p2 )); guard "$low"
       fi
-      set_fan 1 "$p1"; sleep 0.3; set_fan 2 "$p2"
-      verify_or_revert "$p1" "$p2"
-      echo "manual: fan1=${p1}% fan2=${p2}%" > "$STATE"
+      op set_duties "$p1" "$p2"
       echo "Set: fan1 (CPU) = ${p1}%, fan2 (GPU) = ${p2}%"
       ;;
   esac
