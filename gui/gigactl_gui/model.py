@@ -29,7 +29,9 @@ class Support(enum.Enum):
 
 
 def classify(vendor: str, name: str) -> Support:
-    if vendor.strip().upper() != "GIGABYTE":
+    # Prefix match, like the gfan/gkbd guard (GIGABYTE*|Gigabyte*): some boards
+    # report the long "Gigabyte Technology Co., Ltd." vendor string.
+    if not vendor.strip().upper().startswith("GIGABYTE"):
         return Support.UNSUPPORTED
     n = name.strip().upper()
     if n == VERIFIED_MODEL:
@@ -53,7 +55,7 @@ class Model:
         if self.support is Support.EXPECTED:
             return f"Gigabyte {self.name} — expected to work (verified on {VERIFIED_MODEL})"
         machine = f"{self.vendor} {self.name}".strip() or "This machine"
-        return f"{machine} — not a supported Gigabyte G5/G6"
+        return f"{machine} — not a supported Gigabyte G5/G6/G7"
 
 
 def _read(path: str) -> str:

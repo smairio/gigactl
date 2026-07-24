@@ -21,6 +21,7 @@ _CSS = """
 .verbar.verified   { background-color: @success_bg_color; color: @success_fg_color; }
 .verbar.expected   { background-color: @warning_bg_color; color: @warning_fg_color; }
 .verbar.unsupported{ background-color: @error_bg_color;   color: @error_fg_color; }
+.gauge-num { font-size: 32px; font-weight: 800; font-feature-settings: "tnum"; }
 .gauge-label { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.55; }
 .status-pill { padding: 5px 12px; border-radius: 99px; font-weight: 700; font-size: 12px; }
 .status-pill.cool { background-color: alpha(@success_color, 0.16); color: @success_color; }

@@ -17,20 +17,11 @@ from .client import DaemonClient, Telemetry  # noqa: E402
 from .gauge import TempGauge  # noqa: E402
 from .model import Model, Support  # noqa: E402
 
-_SUPPORT_CSS = {
-    Support.VERIFIED: "verified",
-    Support.EXPECTED: "expected",
-    Support.UNSUPPORTED: "unsupported",
-}
-_BAND_CSS = {
-    temperature.Band.COOL: "cool",
-    temperature.Band.WARM: "warm",
-    temperature.Band.HOT: "hot",
-}
-
 
 def _rpm(value: int) -> str:
-    return f"{value:,}".replace(",", " ")  # narrow no-break space groups
+    # Group thousands with a narrow no-break space (U+202F) so it reads "4 637"
+    # and never wraps mid-value.
+    return f"{value:,}".replace(",", " ")
 
 
 class OverviewWindow(Adw.ApplicationWindow):
@@ -76,7 +67,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         }[model.support]
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         box.add_css_class("verbar")
-        box.add_css_class(_SUPPORT_CSS[model.support])
+        box.add_css_class(model.support.value)  # "verified" / "expected" / "unsupported"
         box.append(Gtk.Image.new_from_icon_name(icon))
         label = Gtk.Label(label=model.banner, xalign=0.0, wrap=True)
         box.append(label)
@@ -137,7 +128,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._cpu_gauge.set_temp(t.cpu_temp)
         self._gpu_gauge.set_temp(t.gpu_temp)
         text, band = temperature.summary(t.cpu_temp, t.gpu_temp)
-        self._set_pill(text, _BAND_CSS[band])
+        self._set_pill(text, band.value)  # band.value == the css class
         self._cpu_rpm.set_text(_rpm(t.fan1_rpm))
         self._gpu_rpm.set_text(_rpm(t.fan2_rpm))
         self._cpu_duty.set_text(f"{t.fan1_duty_pct}% duty")
@@ -158,7 +149,7 @@ class OverviewWindow(Adw.ApplicationWindow):
 
     def _set_pill(self, text: str, band_css: str | None) -> None:
         self._pill.set_text(text)
-        for css in _BAND_CSS.values():
-            self._pill.remove_css_class(css)
+        for b in temperature.Band:
+            self._pill.remove_css_class(b.value)
         if band_css:
             self._pill.add_css_class(band_css)

@@ -58,13 +58,16 @@ class TempGauge(Adw.Bin):
         self.set_temp(None)
 
     def set_temp(self, temp_c: float | None) -> None:
+        # Size/weight/tabular-figures come from the .gauge-num CSS rule; the
+        # markup only carries the dynamic band colour and the smaller degree
+        # sign, so the digits stay tabular and don't jitter between polls.
         self._temp = temp_c
         if temp_c is None:
-            self._num.set_markup('<span size="xx-large" weight="bold">–</span>')
+            self._num.set_markup("<span>–</span>")
         else:
             color = temperature.color_hex(temp_c, dark=self._dark())
             self._num.set_markup(
-                f'<span size="xx-large" weight="bold" foreground="{color}">'
+                f'<span foreground="{color}">'
                 f'{int(round(temp_c))}<span size="small">°</span></span>'
             )
         self._area.queue_draw()

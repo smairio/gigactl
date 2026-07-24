@@ -16,6 +16,12 @@ def test_non_gigabyte_is_unsupported():
     assert model.classify("Dell Inc.", "G6 KF") is Support.UNSUPPORTED
 
 
+def test_long_vendor_string_is_matched():
+    # Prefix match, like gfan/gkbd: some boards report the long vendor string.
+    assert model.classify("Gigabyte Technology Co., Ltd.", "G6 KF") is Support.VERIFIED
+    assert model.classify("GIGABYTE Technology", "G5 MF") is Support.EXPECTED
+
+
 def test_other_gigabyte_model_is_unsupported():
     assert model.classify("GIGABYTE", "AERO 15") is Support.UNSUPPORTED
 

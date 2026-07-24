@@ -30,7 +30,7 @@ class Telemetry:
     fan2_duty_pct: int
 
     @classmethod
-    def from_tuple(cls, values) -> "Telemetry":
+    def from_tuple(cls, values) -> Telemetry:
         if len(values) != 6:
             raise ValueError(f"expected 6 telemetry fields, got {len(values)}")
         return cls(*(int(v) for v in values))
@@ -66,7 +66,7 @@ class DaemonClient:
         try:
             self._proxy = Gio.DBusProxy.new_for_bus_finish(result)
         except GLib.Error as exc:  # pragma: no cover - environment dependent
-            print(f"gigactl-gui: could not reach the daemon: {exc}")
+            print(f"gigactl-gui: could not reach the daemon: {exc}", flush=True)
             self._notify_availability()
             return
         self._proxy.connect("g-signal", self._on_signal)
@@ -77,16 +77,16 @@ class DaemonClient:
     def available(self) -> bool:
         return bool(self._proxy and self._proxy.get_name_owner())
 
-    def daemon_version(self) -> str | None:
-        if not self._proxy:
-            return None
-        v = self._proxy.get_cached_property("DaemonVersion")
-        return v.get_string() if v is not None else None
-
     def _notify_availability(self) -> None:
         if self._on_availability:
             self._on_availability(self.available)
 
     def _on_signal(self, _proxy, _sender, signal_name, params) -> None:
-        if signal_name == "Telemetry" and self._on_telemetry:
+        # Runs on the GLib loop — never let an exception escape into the
+        # dispatcher; a malformed emit would otherwise crash it.
+        if signal_name != "Telemetry" or not self._on_telemetry:
+            return
+        try:
             self._on_telemetry(Telemetry.from_tuple(params.unpack()))
+        except Exception as exc:
+            print(f"gigactl-gui: bad telemetry signal: {exc}", flush=True)
