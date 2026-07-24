@@ -1,0 +1,39 @@
+#!/usr/bin/make -f
+# gigactl is an application, not an importable library, so it is installed the
+# way Debian Python Policy prescribes for private modules: the module tree goes
+# to /usr/lib/gigactl and dh_python3 is pointed at that directory. No pybuild —
+# there is no upstream build system to drive, and nothing belongs in
+# dist-packages.
+
+# hicolor raster sizes rendered from design/icon.svg at build time, so the SVG
+# stays the single source of the icon.
+ICON_SIZES = 16 24 32 48 64 128 256
+ICON_DIR = debian/icons
+ICON_NAME = io.github.smairio.gigactl
+
+%:
+	dh $@ --with python3
+
+override_dh_auto_build:
+	for size in $(ICON_SIZES); do \
+	  mkdir -p $(ICON_DIR)/$${size}x$${size} && \
+	  rsvg-convert -w $$size -h $$size design/icon.svg \
+	    -o $(ICON_DIR)/$${size}x$${size}/$(ICON_NAME).png || exit 1; \
+	done
+	mkdir -p $(ICON_DIR)/scalable $(ICON_DIR)/symbolic
+	cp design/icon.svg $(ICON_DIR)/scalable/$(ICON_NAME).svg
+	cp design/icon-symbolic.svg $(ICON_DIR)/symbolic/$(ICON_NAME)-symbolic.svg
+
+# debian/clean would be the obvious home for this, but dh_clean only does `rm -f`
+# on the names it is given, so a generated *directory* has to go here.
+override_dh_clean:
+	rm -rf $(ICON_DIR)
+	dh_clean
+
+# A malformed desktop entry is invisible until a login fails to autostart the
+# tray, so let the build catch it instead.
+override_dh_auto_test:
+	desktop-file-validate gui/data/*.desktop
+
+override_dh_python3:
+	dh_python3 /usr/lib/gigactl

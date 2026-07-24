@@ -1,0 +1,7 @@
+# The systemctl call in postinst acts on gkbd-restore.service, which no package
+# owns — install.sh dropped it into /etc/systemd/system by hand. deb-systemd-
+# invoke and deb-systemd-helper only manage units the package itself ships, so
+# they cannot disable this one; systemctl is the only handle, and the call is
+# guarded on /run/systemd/system and on the file existing. gigactl's own unit is
+# left entirely to dh_installsystemd.
+gigactl: maintainer-script-calls-systemctl [postinst:*]

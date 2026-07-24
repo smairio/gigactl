@@ -1,0 +1,30 @@
+# source                                        destination
+# --- the private module tree (Debian Python Policy: not dist-packages) --------
+daemon/gigactld/*.py                            usr/lib/gigactl/gigactld
+gui/gigactl_gui/*.py                            usr/lib/gigactl/gigactl_gui
+
+# --- entry points ------------------------------------------------------------
+debian/bin/gigactld                             usr/bin
+debian/bin/gigactl-gui                          usr/bin
+gfan                                            usr/bin
+gkbd                                            usr/bin
+
+# --- system integration ------------------------------------------------------
+daemon/data/gigactl.service                     usr/lib/systemd/system
+daemon/data/io.github.smairio.gigactl.conf      usr/share/dbus-1/system.d
+daemon/data/io.github.smairio.gigactl.policy    usr/share/polkit-1/actions
+debian/extra/modules-load.d/gigactl.conf        usr/lib/modules-load.d
+debian/extra/modprobe.d/gigactl.conf            usr/lib/modprobe.d
+
+# --- desktop integration -----------------------------------------------------
+gui/data/io.github.smairio.gigactl.desktop      usr/share/applications
+gui/data/gigactl-tray.desktop                   etc/xdg/autostart
+debian/icons/scalable/io.github.smairio.gigactl.svg          usr/share/icons/hicolor/scalable/apps
+debian/icons/symbolic/io.github.smairio.gigactl-symbolic.svg usr/share/icons/hicolor/symbolic/apps
+debian/icons/16x16/io.github.smairio.gigactl.png             usr/share/icons/hicolor/16x16/apps
+debian/icons/24x24/io.github.smairio.gigactl.png             usr/share/icons/hicolor/24x24/apps
+debian/icons/32x32/io.github.smairio.gigactl.png             usr/share/icons/hicolor/32x32/apps
+debian/icons/48x48/io.github.smairio.gigactl.png             usr/share/icons/hicolor/48x48/apps
+debian/icons/64x64/io.github.smairio.gigactl.png             usr/share/icons/hicolor/64x64/apps
+debian/icons/128x128/io.github.smairio.gigactl.png           usr/share/icons/hicolor/128x128/apps
+debian/icons/256x256/io.github.smairio.gigactl.png           usr/share/icons/hicolor/256x256/apps

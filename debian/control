@@ -1,0 +1,42 @@
+Source: gigactl
+Section: utils
+Priority: optional
+Maintainer: khalil Smairi <smairio98@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ python3,
+ librsvg2-bin,
+ desktop-file-utils,
+Standards-Version: 4.6.2
+Homepage: https://github.com/smairio/gigactl
+Rules-Requires-Root: no
+
+Package: gigactl
+Architecture: amd64
+Depends:
+ ${python3:Depends},
+ ${misc:Depends},
+ python3-gi,
+ gir1.2-gtk-4.0,
+ gir1.2-adw-1,
+ dbus,
+ polkitd,
+Suggests: gnome-shell-extension-appindicator
+Description: fan and keyboard backlight control for Gigabyte G5/G6 laptops
+ GigaControl gives Gigabyte G-series gaming laptops the fan and RGB keyboard
+ control their firmware keeps to itself: fan profiles and editable custom
+ curves, backlight colour and brightness that survive a reboot and a suspend,
+ and live temperature and RPM readings.
+ .
+ A small root daemon owns Embedded Controller access and exposes it on the D-Bus
+ system bus, authorising each write through polkit — the console user changes
+ fan speed or backlight colour without a password, as with screen brightness.
+ The desktop app and the command line tools are unprivileged clients of it.
+ .
+ These laptops are Clevo-ODM designs whose EC speaks a Clevo-style mailbox
+ protocol, reverse engineered and verified on a Gigabyte G6 KF. Installation is
+ refused on hardware outside the G5/G6/G7 range, and every write is read back.
+ .
+ On GNOME the tray indicator needs an AppIndicator extension, which Ubuntu
+ preinstalls; without one the app runs from its window alone.

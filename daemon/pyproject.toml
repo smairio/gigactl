@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gigactld"
-version = "0.1.0"
+version = "1.0.0"
 description = "GigaControl daemon — EC access + D-Bus API for Gigabyte G5/G6 laptops"
 requires-python = ">=3.10"
 # Runtime dependency is PyGObject (system package python3-gi); it is not

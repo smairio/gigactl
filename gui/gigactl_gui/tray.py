@@ -35,7 +35,7 @@ WATCHER_PATH = "/StatusNotifierWatcher"
 ITEM_PATH = "/StatusNotifierItem"
 MENU_PATH = "/StatusNotifierItem/menu"
 
-# The app's own icon is installed by the .deb; until then fall back to a stock
+# The app's own icons are installed by the .deb; until then fall back to a stock
 # symbolic name so the tray always shows something recognisable.
 _ICON_FALLBACKS = ("power-profile-performance-symbolic",
                    "preferences-system-symbolic")
@@ -133,12 +133,23 @@ _MENU_XML = """
 """
 
 
+def icon_candidates(app_id: str) -> tuple[str, ...]:
+    """Icon names in preference order.
+
+    The symbolic variant comes first: a tray lives in a monochrome panel strip,
+    where the full-colour app tile reads as a dark blob and its blades shrink to
+    a faint cross. Both are installed by the .deb; the stock names are there for
+    a source checkout, where neither exists yet.
+    """
+    return (f"{app_id}-symbolic", app_id, *_ICON_FALLBACKS)
+
+
 def pick_icon(app_id: str) -> str:
-    """The app's icon once installed, else a stock symbolic that exists."""
+    """The best icon the theme actually has, else a stock symbolic that exists."""
     display = Gdk.Display.get_default()
     if display is not None:
         theme = Gtk.IconTheme.get_for_display(display)
-        for name in (app_id, *_ICON_FALLBACKS):
+        for name in icon_candidates(app_id):
             if theme.has_icon(name):
                 return name
     return _ICON_FALLBACKS[-1]

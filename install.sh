@@ -50,10 +50,11 @@ systemctl daemon-reload
 systemctl enable gkbd-restore.service >/dev/null 2>&1
 
 # --- desktop integration for the GUI -----------------------------------------
-# The .deb will own these properly; installing them here is what makes the
-# launcher, the tray icon's themed name and login autostart work from a source
-# checkout. The icon goes into hicolor as a scalable app icon so both the
-# desktop entries' Icon= and the tray's IconName resolve to it.
+# The .deb (dpkg-buildpackage -us -uc -b) owns all of this properly and installs
+# the daemon too — prefer it. Installing these by hand is what makes the launcher,
+# the tray icon's themed name and login autostart work from a source checkout.
+# The icon goes into hicolor as a scalable app icon so both the desktop entries'
+# Icon= and the tray's IconName resolve to it.
 install -d /usr/share/icons/hicolor/scalable/apps
 install -m 644 "$DIR/design/icon.svg" \
   /usr/share/icons/hicolor/scalable/apps/io.github.smairio.gigactl.svg
@@ -61,9 +62,9 @@ gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
 
 # The entries above are dead without the binary they name: systemd's XDG
 # autostart generator skips any entry whose Exec= is not on PATH. This wrapper
-# runs the GUI straight out of this checkout; the .deb (#22) replaces it with a
-# real entry point. NOTE: this script does not yet install the daemon itself —
-# also #22 — so run it from daemon/ for now.
+# runs the GUI straight out of this checkout; the .deb ships a real entry point
+# at /usr/bin/gigactl-gui instead. NOTE: this script does not install the daemon
+# — build the .deb for that, or run it from daemon/ by hand.
 install -d /usr/local/bin
 cat > /usr/local/bin/gigactl-gui <<WRAPPER
 #!/bin/sh

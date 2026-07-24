@@ -131,6 +131,19 @@ def test_every_menu_property_matches_its_declared_signature():
         assert value.get_type_string() == prop.signature, prop.name
 
 
+# --- which icon a panel gets -------------------------------------------------
+
+def test_the_symbolic_app_icon_is_preferred_over_the_full_colour_one():
+    """A panel is a monochrome strip: the full-colour tile reads as a dark blob
+    on it. The order is pure so it can be asserted without a display — pick_icon
+    itself needs one, and then only keeps names the theme actually has."""
+    candidates = tray.icon_candidates("io.github.smairio.gigactl")
+    assert candidates[0] == "io.github.smairio.gigactl-symbolic"
+    assert candidates[1] == "io.github.smairio.gigactl"
+    assert candidates[2:] == tray._ICON_FALLBACKS
+    assert all(name.endswith("-symbolic") for name in tray._ICON_FALLBACKS)
+
+
 def test_an_unknown_property_is_none_rather_than_an_error():
     assert _icon()._item_property(None, None, None, ITEM_IFACE, "Nope") is None
 

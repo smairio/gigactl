@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # The daemon's own state: the saved fan profile, custom curves and
+        # keyboard colour. Kept across a plain remove, dropped on purge.
+        rm -rf /var/lib/gigactl
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

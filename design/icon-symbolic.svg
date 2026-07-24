@@ -1,0 +1,16 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GigaControl">
+  <!-- Symbolic variant of icon.svg for panels and tray hosts: the same four
+       swept blades and hub, redrawn on the 16px symbolic grid and flattened to
+       one flat fill so the theme can recolour it. No gradients, no tile. The
+       blades are deliberately fatter and the hub larger than a scaled-down
+       icon.svg would give — at 16px the original's taper disappears. -->
+  <g fill="#2e3436">
+    <g transform="translate(8 8)">
+      <path d="M1.6,-1.4 C4.8,-4.4 7.4,-2.8 7.0,0.8 C5.6,-0.2 3.6,-0.9 1.6,-1.4 Z" transform="rotate(0)"/>
+      <path d="M1.6,-1.4 C4.8,-4.4 7.4,-2.8 7.0,0.8 C5.6,-0.2 3.6,-0.9 1.6,-1.4 Z" transform="rotate(90)"/>
+      <path d="M1.6,-1.4 C4.8,-4.4 7.4,-2.8 7.0,0.8 C5.6,-0.2 3.6,-0.9 1.6,-1.4 Z" transform="rotate(180)"/>
+      <path d="M1.6,-1.4 C4.8,-4.4 7.4,-2.8 7.0,0.8 C5.6,-0.2 3.6,-0.9 1.6,-1.4 Z" transform="rotate(270)"/>
+    </g>
+    <circle cx="8" cy="8" r="2.4"/>
+  </g>
+</svg>

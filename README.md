@@ -23,13 +23,45 @@ Both tools check your DMI vendor/model before writing anything, and `gfan` verif
 
 ## Install
 
+### The package (recommended)
+
+```bash
+sudo apt install ./gigactl_1.0.0_amd64.deb
+```
+
+One `.deb` installs everything: the **GigaControl** desktop app, the `gigactld`
+daemon that owns EC access, and both CLI tools. The daemon starts immediately and
+at every boot; the app appears in your app grid and keeps a tray icon from the
+next login. Installation is refused on hardware outside the Gigabyte G5/G6/G7
+range (override with `GIGACTL_FORCE_INSTALL=1`).
+
+`sudo apt remove gigactl` stops the daemon and hands the fans back to the
+firmware curve; `sudo apt purge gigactl` also drops the saved profile, curves and
+keyboard colour.
+
+To build it yourself:
+
+```bash
+sudo apt install debhelper dh-python librsvg2-bin desktop-file-utils
+python3 -m pytest packaging -q      # checks debian/ against the source tree
+dpkg-buildpackage -us -uc -b        # the .deb lands in the parent directory
+```
+
+### From a source checkout (CLI only)
+
 ```bash
 git clone https://github.com/smairio/gigactl
 cd gigactl
 sudo ./install.sh
 ```
 
-The installer fetches `ec_probe` (from the excellent [nbfc-linux](https://github.com/nbfc-linux/nbfc-linux) project) if it isn't already present, installs both tools to `/usr/local/bin`, and sets up a systemd service that restores your keyboard color at boot and after suspend.
+This is the pre-daemon path: it fetches `ec_probe` (from the excellent
+[nbfc-linux](https://github.com/nbfc-linux/nbfc-linux) project) if needed,
+installs both tools to `/usr/local/bin`, and sets up a systemd service that
+restores your keyboard color at boot and after suspend. The package supersedes
+that service with the daemon's own restore — and note that `/usr/local/bin` comes
+first on `PATH`, so run `sudo ./install.sh --uninstall` before installing the
+package if you have used it.
 
 To uninstall: `sudo ./install.sh --uninstall`
 

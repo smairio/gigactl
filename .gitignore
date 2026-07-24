@@ -6,6 +6,16 @@ __pycache__/
 build/
 dist/
 
+# Debian packaging build products (the .deb lands in the parent directory)
+/debian/gigactl/
+/debian/icons/
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper
+/debian/*.debhelper.log
+/debian/debhelper-build-stamp
+/debian/tmp/
+
 # Editor / OS
 *.swp
 .DS_Store

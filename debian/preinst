@@ -1,0 +1,52 @@
+#!/bin/sh
+# The same hardware guard install.sh applies, moved to install time: this
+# package writes to a reverse-engineered Embedded Controller verified on one
+# machine, and the registers it pokes mean something else entirely on a laptop
+# from another ODM.
+set -e
+
+DMI=/sys/class/dmi/id
+
+refuse() {
+    cat >&2 <<EOF
+gigactl: refusing to install on '$1 $2'.
+
+  GigaControl drives a Clevo-ODM Embedded Controller, reverse engineered and
+  verified on a Gigabyte G6 KF. On other hardware the same registers can mean
+  anything, so installing here is not safe.
+
+  If you are certain this machine is a Gigabyte G5/G6/G7 that reports itself
+  unusually, override the check with:
+
+      sudo GIGACTL_FORCE_INSTALL=1 apt install ./gigactl_*.deb
+EOF
+    exit 1
+}
+
+check_hardware() {
+    if [ "${GIGACTL_FORCE_INSTALL:-0}" = "1" ]; then
+        echo "gigactl: GIGACTL_FORCE_INSTALL=1 — skipping the hardware check." >&2
+        return 0
+    fi
+    vendor=$(cat "$DMI/sys_vendor" 2>/dev/null || true)
+    model=$(cat "$DMI/product_name" 2>/dev/null || true)
+    case "$vendor" in
+        GIGABYTE*|Gigabyte*) ;;
+        *) refuse "$vendor" "$model" ;;
+    esac
+    case "$model" in
+        "G6 KF") ;;  # verified live
+        G5*|G6*|G7*)
+            echo "gigactl: note: '$model' is untested — verified on the G6 KF," \
+                 "same Clevo platform expected. Every write is read back." >&2 ;;
+        *) refuse "$vendor" "$model" ;;
+    esac
+}
+
+case "$1" in
+    install|upgrade) check_hardware ;;
+esac
+
+#DEBHELPER#
+
+exit 0

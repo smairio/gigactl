@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gigactl-gui"
-version = "0.1.0"
+version = "1.0.0"
 description = "GigaControl — GTK4/libadwaita desktop GUI for gigactl (Gigabyte G5/G6 fan + keyboard control)"
 requires-python = ">=3.10"
 # Runtime dependency is PyGObject + GTK4/libadwaita introspection (system

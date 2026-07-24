@@ -5,4 +5,4 @@ root daemon over the D-Bus **system** bus (telemetry + control). All EC access
 lives in the daemon; this package never touches hardware directly.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

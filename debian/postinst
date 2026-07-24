@@ -1,0 +1,49 @@
+#!/bin/sh
+set -e
+
+# The daemon now owns keyboard restore — it persists colour, brightness and
+# on-state to /var/lib/gigactl/state.json and re-applies them at boot and on
+# resume. A machine that ran install.sh also carries the standalone restore,
+# which reads a *different* store (/var/lib/gkbd) and would apply the backlight
+# a second time at both moments, letting a stale value win the race.
+#
+# These two files are not owned by any package (a shell installer left them), so
+# deb-systemd-helper knows nothing about them and systemctl is the only handle.
+supersede_legacy_gkbd() {
+    legacy_unit=/etc/systemd/system/gkbd-restore.service
+    legacy_hook=/lib/systemd/system-sleep/gkbd
+    [ -e "$legacy_unit" ] || [ -e "$legacy_hook" ] || return 0
+    echo "gigactl: superseding the standalone gkbd keyboard restore; the daemon" \
+         "does this now."
+    if [ -d /run/systemd/system ]; then
+        systemctl disable --now gkbd-restore.service >/dev/null 2>&1 || true
+    fi
+    rm -f "$legacy_unit" "$legacy_hook"
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+}
+
+# /usr/local is the admin's, so a package must not delete anything there — but a
+# checkout's wrapper silently winning on PATH is worth saying out loud, because
+# the autostart entry would then run the GUI out of a directory that may not
+# even exist any more.
+warn_about_local_copies() {
+    for stale in /usr/local/bin/gfan /usr/local/bin/gkbd /usr/local/bin/gigactl-gui; do
+        [ -e "$stale" ] || continue
+        echo "gigactl: warning: $stale comes earlier on PATH than the packaged" \
+             "/usr/bin/${stale##*/} and will be used instead. Remove the" \
+             "source install with 'sudo ./install.sh --uninstall'."
+    done
+}
+
+case "$1" in
+    configure)
+        supersede_legacy_gkbd
+        warn_about_local_copies
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
