@@ -5,21 +5,23 @@ own small connection to the daemon. Lifetime is the fiddly part, because a traye
 app has no window to keep it alive and GApplication stops as soon as nothing holds
 it. Two rules cover it:
 
-* the app is **held** while a tray icon is showing, or while still waiting to find
-  out whether one will appear. A visible window needs no hold — it is its own.
-* the user is never left with neither a tray icon nor a window: whenever both are
-  missing we wait out a short grace period (a host may still be starting, and a
-  GNOME Shell restart drops the watcher for a moment) and then show the window.
+* the app is **held** while a tray icon is showing, while still waiting to find
+  out whether one will appear, and while nothing is on screen at all. A visible
+  window needs no hold — it is its own.
+* a window is offered only when no host has **ever** answered. One that answered
+  and then vanished is waited out silently, because GNOME disables extensions at
+  the lock screen and a window must not appear over it.
 
 So while a tray is present, closing the window merely hides it and reopening is
 instant; with no tray host at all, ``--tray`` shows the window instead of becoming
-an invisible process, and closing really quits.
+an invisible process, and closing it then really quits.
 """
 from __future__ import annotations
 
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
@@ -94,6 +96,10 @@ class GigactlApp(Adw.Application):
         self._tray_client: DaemonClient | None = None
         self._held = False
         self._grace_source = 0
+        # Whether a tray host has *ever* answered. "Never answered" earns a
+        # window; "answered then went away" (a screen lock, a shell restart) is
+        # waited out silently — see lifetime.should_offer_window.
+        self._tray_ever_registered = False
 
     # --- lifecycle -----------------------------------------------------------
     def do_startup(self) -> None:
@@ -103,17 +109,23 @@ class GigactlApp(Adw.Application):
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        # GTK4 widgets have no destroy signal; the application tells us instead,
+        # so a closed window never leaves a stale reference behind.
+        self.connect("window-removed", self._on_window_removed)
         self._start_tray()
 
     def do_activate(self) -> None:
         if self._window is None:
             self._window = OverviewWindow(self, model_mod.detect())
+            self._apply_close_policy()
         if self._start_hidden:
             # Launched to the tray: build the window but leave it hidden until
             # asked for. A later activation (tray click, second launch) shows it.
             self._start_hidden = False
+            self._sync_hold()
             return
         self._window.present()
+        self._sync_hold()
 
     def do_shutdown(self) -> None:
         if self._grace_source:
@@ -137,18 +149,22 @@ class GigactlApp(Adw.Application):
         if self._start_hidden:
             # Nothing is on screen yet, so without a hold GApplication would see
             # a use count of zero and stop before the tray could even answer.
-            self._ensure_reachable()
+            self._await_tray()
 
-    def _ensure_reachable(self) -> None:
-        """Never leave the user with neither a tray icon nor a window: wait
-        briefly, then show the window (see :mod:`lifetime`)."""
-        if self._grace_source:
-            return  # already waiting
-        if not lifetime.is_unreachable(tray_available=self._tray_showing(),
-                                       window_visible=self._window_visible()):
+    def _await_tray(self) -> None:
+        """Give a tray host a moment to answer; if none ever does, the grace
+        timer shows the window instead (see :mod:`lifetime`)."""
+        if self._grace_source or not self._should_offer_window():
+            self._sync_hold()
             return
         self._grace_source = GLib.timeout_add(_TRAY_GRACE_MS, self._grace_expired)
         self._sync_hold()
+
+    def _should_offer_window(self) -> bool:
+        return lifetime.should_offer_window(
+            tray_ever_registered=self._tray_ever_registered,
+            tray_available=self._tray_showing(),
+            window_visible=self._window_visible())
 
     def _tray_showing(self) -> bool:
         return self._tray is not None and self._tray.available
@@ -158,7 +174,7 @@ class GigactlApp(Adw.Application):
 
     def _grace_expired(self) -> bool:
         self._grace_source = 0
-        if not self._tray_showing():
+        if self._should_offer_window():
             print("gigactl-gui: no tray host on this session, showing the window "
                   "instead", flush=True)
             self._start_hidden = False
@@ -168,7 +184,8 @@ class GigactlApp(Adw.Application):
 
     def _sync_hold(self) -> None:
         wanted = lifetime.should_hold(tray_available=self._tray_showing(),
-                                      waiting_for_tray=bool(self._grace_source))
+                                      waiting_for_tray=bool(self._grace_source),
+                                      window_visible=self._window_visible())
         if wanted and not self._held:
             self.hold()
             self._held = True
@@ -177,18 +194,34 @@ class GigactlApp(Adw.Application):
             self._held = False
 
     def _on_tray_available(self, available: bool) -> None:
-        if self._window is not None:
-            # With a tray to get back from, closing the window only hides it;
-            # without one, closing must really quit.
-            self._window.set_hide_on_close(available)
         if available:
+            self._tray_ever_registered = True
             if self._grace_source:
                 GLib.source_remove(self._grace_source)
                 self._grace_source = 0
-            self._sync_hold()
+        self._apply_close_policy()
+        # Every path ends here: skipping it once left the tray's hold in place
+        # after the icon went away, and the app outlived its last window.
+        self._sync_hold()
+        if available:
             self._refresh_tray()
-        else:
-            self._ensure_reachable()
+
+    def _apply_close_policy(self) -> None:
+        """With a tray to reopen from, closing the window only hides it."""
+        if self._window is not None:
+            self._window.set_hide_on_close(not lifetime.should_quit_on_close(
+                tray_available=self._tray_showing()))
+
+    def _on_window_removed(self, _app, window) -> None:
+        if window is not self._window:
+            return
+        self._window = None
+        if lifetime.should_quit_on_close(tray_available=self._tray_showing()):
+            # No icon to come back from, so the close was a real goodbye rather
+            # than a hide — going on would leave a process nobody can reach.
+            self.quit()
+            return
+        self._sync_hold()
 
     def _refresh_tray(self) -> None:
         if not self._tray or not self._tray_client:
@@ -224,7 +257,7 @@ class GigactlApp(Adw.Application):
     def _notify_error(self, message: str) -> None:
         """A tray action can fail with no window on screen, so say it where the
         user will actually see it."""
-        if self._window is not None and self._window.get_visible():
+        if self._window_visible():
             self._window.show_error(message)
             return
         notification = Gio.Notification.new("GigaControl")

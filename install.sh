@@ -49,6 +49,36 @@ install -m 755 "$DIR/systemd/system-sleep-gkbd" /lib/systemd/system-sleep/gkbd
 systemctl daemon-reload
 systemctl enable gkbd-restore.service >/dev/null 2>&1
 
+# --- desktop integration for the GUI -----------------------------------------
+# The .deb will own these properly; installing them here is what makes the
+# launcher, the tray icon's themed name and login autostart work from a source
+# checkout. The icon goes into hicolor as a scalable app icon so both the
+# desktop entries' Icon= and the tray's IconName resolve to it.
+install -d /usr/share/icons/hicolor/scalable/apps
+install -m 644 "$DIR/design/icon.svg" \
+  /usr/share/icons/hicolor/scalable/apps/io.github.smairio.gigactl.svg
+gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
+
+# The entries above are dead without the binary they name: systemd's XDG
+# autostart generator skips any entry whose Exec= is not on PATH. This wrapper
+# runs the GUI straight out of this checkout; the .deb (#22) replaces it with a
+# real entry point. NOTE: this script does not yet install the daemon itself —
+# also #22 — so run it from daemon/ for now.
+install -d /usr/local/bin
+cat > /usr/local/bin/gigactl-gui <<WRAPPER
+#!/bin/sh
+# installed by gigactl install.sh from $DIR
+exec env PYTHONPATH="$DIR/gui" python3 -m gigactl_gui "\$@"
+WRAPPER
+chmod 755 /usr/local/bin/gigactl-gui
+
+install -d /usr/share/applications /etc/xdg/autostart
+install -m 644 "$DIR/gui/data/io.github.smairio.gigactl.desktop" \
+  /usr/share/applications/io.github.smairio.gigactl.desktop
+install -m 644 "$DIR/gui/data/gigactl-tray.desktop" \
+  /etc/xdg/autostart/gigactl-tray.desktop
+update-desktop-database -q /usr/share/applications 2>/dev/null || true
+
 echo
 echo "gigactl installed successfully."
 echo "  gfan          # fan status"

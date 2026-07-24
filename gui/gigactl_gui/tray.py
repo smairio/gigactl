@@ -24,6 +24,7 @@ from typing import Callable
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import tray_menu  # noqa: E402
@@ -164,6 +165,7 @@ class TrayIcon:
         self._item_reg = 0
         self._menu_reg = 0
         self._warned = False
+        self._stopped = False
         self.available = False  # a watcher is present and we are registered
 
     # --- lifecycle -----------------------------------------------------------
@@ -210,6 +212,8 @@ class TrayIcon:
         except GLib.Error as exc:
             print(f"gigactl-gui: the tray host refused us: {exc.message}", flush=True)
             return
+        if self._stopped:
+            return  # the reply outlived us; do not come back to life
         self._set_available(True)
         print("gigactl-gui: tray icon registered", flush=True)
 
@@ -233,6 +237,7 @@ class TrayIcon:
                       flush=True)
 
     def stop(self) -> None:
+        self._stopped = True
         for source, unwatch in ((self._watch_id, Gio.bus_unwatch_name),
                                 (self._name_id, Gio.bus_unown_name)):
             if source:
@@ -265,7 +270,17 @@ class TrayIcon:
             print(f"gigactl-gui: could not refresh the tray: {exc}", flush=True)
 
     # --- StatusNotifierItem --------------------------------------------------
-    def _item_property(self, _conn, _sender, _path, _iface, prop):
+    def _item_property(self, _conn, _sender, _path, _iface,
+                       prop: str) -> GLib.Variant | None:
+        # Reached from the GLib dispatcher like the method calls, so it gets the
+        # same guard: a raising property getter would take the loop down.
+        try:
+            return self._item_property_value(prop)
+        except Exception as exc:
+            print(f"gigactl-gui: tray property {prop} failed: {exc}", flush=True)
+            return None
+
+    def _item_property_value(self, prop: str) -> GLib.Variant | None:
         if prop == "Category":
             return GLib.Variant("s", "Hardware")
         if prop == "Id":
@@ -290,7 +305,8 @@ class TrayIcon:
                                                  self._detail))
         return None
 
-    def _item_call(self, _conn, _sender, _path, _iface, method, _params, invocation):
+    def _item_call(self, _conn, _sender, _path, _iface, method: str,
+                   _params, invocation) -> None:
         try:
             if method in ("Activate", "SecondaryActivate"):
                 self._act(tray_menu.ACTION_OPEN)
@@ -302,7 +318,15 @@ class TrayIcon:
             invocation.return_value(None)
 
     # --- com.canonical.dbusmenu ---------------------------------------------
-    def _menu_property(self, _conn, _sender, _path, _iface, prop):
+    def _menu_property(self, _conn, _sender, _path, _iface,
+                       prop: str) -> GLib.Variant | None:
+        try:
+            return self._menu_property_value(prop)
+        except Exception as exc:
+            print(f"gigactl-gui: tray menu property {prop} failed: {exc}", flush=True)
+            return None
+
+    def _menu_property_value(self, prop: str) -> GLib.Variant | None:
         if prop == "Version":
             return GLib.Variant("u", 3)
         if prop == "Status":
@@ -313,7 +337,8 @@ class TrayIcon:
             return GLib.Variant("as", [])
         return None
 
-    def _menu_call(self, _conn, _sender, _path, _iface, method, params, invocation):
+    def _menu_call(self, _conn, _sender, _path, _iface, method: str,
+                   params, invocation) -> None:
         try:
             if method == "GetLayout":
                 invocation.return_value(GLib.Variant.new_tuple(
@@ -324,8 +349,10 @@ class TrayIcon:
                     self._group_properties(ids)))
             elif method == "GetProperty":
                 item_id, name = params.unpack()
-                invocation.return_value(GLib.Variant.new_tuple(
-                    self._one_property(item_id, name)))
+                # the declared out arg is 'v', so the value has to be *boxed*:
+                # new_tuple(value) would reply (s)/(b)/(i) and fail GDBus's check
+                invocation.return_value(
+                    GLib.Variant("(v)", (self._one_property(item_id, name),)))
             elif method == "Event":
                 item_id, event_id, _data, _ts = params.unpack()
                 if event_id == "clicked":

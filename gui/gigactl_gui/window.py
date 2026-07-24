@@ -23,6 +23,7 @@ import math
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
@@ -78,7 +79,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._client = DaemonClient(on_telemetry=self._on_telemetry,
                                     on_availability=self._on_availability,
                                     on_state=self._sync_from_daemon,
-                                    on_error=self._show_error)
+                                    on_error=self.show_error)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         content.set_margin_top(20)
@@ -500,14 +501,10 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._curve_page.set_controls_sensitive(usable)
 
     def show_error(self, message: str) -> None:
-        """Public entry point: the app routes tray-originated failures here when
-        the window is on screen."""
-        self._show_error(message)
-
-    def _show_error(self, message: str) -> None:
         """A refused or rejected write surfaces inline, never silently — and the
         controls snap back, so a failed click never leaves a button claiming
-        something the daemon did not do."""
+        something the daemon did not do. Public because the app routes
+        tray-originated failures here too when the window is on screen."""
         # timeout=0: a write that was refused and auto-reverted is not a
         # transient nicety, so the notice stays until it is dismissed.
         self._toasts.add_toast(Adw.Toast(title=message, timeout=0))
