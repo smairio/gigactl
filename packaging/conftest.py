@@ -132,3 +132,72 @@ def pyproject_scripts(rel: str) -> dict[str, str]:
     """A pyproject's ``[project.scripts]`` as name -> "module:function"."""
     section = text(rel).split("[project.scripts]")[1].split("\n[")[0]
     return dict(re.findall(r'^(\S+) = "(.+?)"$', section, re.MULTILINE))
+
+
+# --- the release workflow ---------------------------------------------------
+
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
+
+
+def workflow() -> dict:
+    """The release workflow, parsed. YAML reads bare ``on`` as True, so it is
+    normalised back to the string GitHub actually means."""
+    import yaml
+
+    parsed = yaml.safe_load(text(RELEASE_WORKFLOW))
+    if True in parsed:
+        parsed["on"] = parsed.pop(True)
+    return parsed
+
+
+def only_job() -> dict:
+    """The workflow's single job — there is one thing to do: build and attach."""
+    jobs = workflow()["jobs"]
+    assert len(jobs) == 1, f"expected one job, got {sorted(jobs)}"
+    return next(iter(jobs.values()))
+
+
+def run_steps() -> list[tuple[str, str]]:
+    """Every step that runs a shell script, as (name, script)."""
+    return [(step.get("name", "<unnamed>"), step["run"])
+            for step in only_job()["steps"] if "run" in step]
+
+
+def workflow_shell() -> str:
+    """All of the workflow's shell, concatenated — for 'is X done anywhere' checks."""
+    return "\n".join(script for _name, script in run_steps())
+
+
+def commands(script: str) -> str:
+    """A script's executable lines: comments and blanks dropped, so a test asking
+    'does it run X' is not answered by a comment mentioning X."""
+    return "\n".join(line for line in script.splitlines()
+                     if line.strip() and not line.strip().startswith("#"))
+
+
+def workflow_commands() -> str:
+    return "\n".join(commands(script) for _name, script in run_steps())
+
+
+def apt_installed() -> set[str]:
+    """Exact package names the workflow installs by hand (not via build-dep)."""
+    packages = set()
+    for line in workflow_commands().splitlines():
+        if "apt-get install" not in line:
+            continue
+        args = line.split("apt-get install", 1)[1].split()
+        packages.update(a for a in args if not a.startswith("-"))
+    return packages
+
+
+def build_depends() -> list[str]:
+    """Bare package names from debian/control's Build-Depends."""
+    match = re.search(r"^Build-Depends:(.*?)(?=^\S)", text("debian/control"),
+                      re.MULTILINE | re.DOTALL)
+    assert match, "debian/control has no Build-Depends"
+    names = []
+    for entry in match.group(1).split(","):
+        entry = entry.strip()
+        if entry:
+            names.append(entry.split()[0].split(":")[0])
+    return names

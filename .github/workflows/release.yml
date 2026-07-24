@@ -1,0 +1,102 @@
+name: release
+
+# Only a v* tag publishes. Nothing here runs on a branch push — this workflow's
+# whole job is to turn a tag into a downloadable .deb.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # gh release create, and the upload that follows it
+
+jobs:
+  deb:
+    # Pinned, not ubuntu-latest: the package is built against noble's debhelper
+    # and python3 and targets noble, so the runner must not move underneath it
+    # when GitHub promotes the next LTS.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # Straight from debian/control, so there is no second list to forget to
+          # update. Everything else here is release tooling, not a build dep.
+          sudo apt-get build-dep -y ./
+          sudo apt-get install -y --no-install-recommends lintian python3-pytest
+
+      - name: Check the tag against debian/changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # debian/changelog is the version source. github.ref_name rather than
+          # git describe: actions/checkout is shallow and fetches no tags.
+          VERSION=$(dpkg-parsechangelog -S Version)
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match debian/changelog version $VERSION"
+            echo "Add a changelog entry for $TAG, or tag v$VERSION instead." >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Test what is about to ship
+        # The two suites that need no GTK stack: packaging/ reads debian/ the way
+        # dpkg-buildpackage is about to, cli/ drives gfan and gkbd against stub
+        # busctl and ec_probe. The daemon and GUI suites want python3-gi and the
+        # GTK4 typelibs; they run locally, and a broken .deb contract shows up
+        # here regardless.
+        #
+        # One invocation each, deliberately: both suites keep their readers in a
+        # top-level conftest.py, so `pytest packaging cli` imports one as the
+        # module `conftest` and the other not at all, and every `from conftest
+        # import ...` in the loser fails to collect.
+        run: |
+          python3 -m pytest packaging -q
+          python3 -m pytest cli -q
+
+      - name: Build the package
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Lint the package
+        # Advisory: lintian's warnings are worth reading, not worth failing a
+        # release over (the four no-manual-page ones are known and accepted).
+        run: lintian ../gigactl_${VERSION}_amd64.deb || true
+
+      # No `apt install` smoke test on purpose: preinst refuses to install on
+      # anything that is not a Gigabyte G5/G6/G7, and a runner is not one. The
+      # closest honest check is the package's own metadata and file list.
+      - name: Show what will be released
+        run: |
+          dpkg -I ../gigactl_${VERSION}_amd64.deb
+          dpkg -c ../gigactl_${VERSION}_amd64.deb
+
+      - name: Take the release notes from the changelog entry
+        run: |
+          # -S Changes emits a blank line, the changelog header, a '.' separator,
+          # then the entry indented by two. Drop those first three lines, unindent
+          # by two so the bullets start at column 1 (continuation lines keep their
+          # two and stay attached to their bullet), and turn any remaining lone '.'
+          # paragraph separator back into a blank line.
+          dpkg-parsechangelog -S Changes \
+            | tail -n +4 \
+            | sed -e 's/^  //' -e 's/^\.$//' > notes.md
+          cat notes.md
+
+      - name: Create the release and attach the .deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A tag cannot be pushed twice, so a job re-run after a transient
+          # failure must be able to finish the job rather than dying on "release
+          # already exists".
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber ../gigactl_${VERSION}_amd64.deb
+          else
+            gh release create "$TAG" \
+              --title "gigactl $VERSION" \
+              --notes-file notes.md \
+              ../gigactl_${VERSION}_amd64.deb
+          fi

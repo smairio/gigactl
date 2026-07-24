@@ -54,6 +54,11 @@ python3 -m pytest cli -q            # drives gfan/gkbd against stub busctl/ec_pr
 dpkg-buildpackage -us -uc -b        # the .deb lands in the parent directory
 ```
 
+Releases are built by CI: pushing a `v*` tag builds the `.deb` on a pinned
+ubuntu-24.04 runner and attaches it to the GitHub Release, with the notes taken
+from that `debian/changelog` entry. The tag has to match the changelog version —
+add the entry first, then `git tag v1.0.0 && git push origin v1.0.0`.
+
 ### From a source checkout (CLI only)
 
 ```bash
