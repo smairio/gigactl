@@ -499,6 +499,11 @@ class OverviewWindow(Adw.ApplicationWindow):
             widget.set_sensitive(usable)
         self._curve_page.set_controls_sensitive(usable)
 
+    def show_error(self, message: str) -> None:
+        """Public entry point: the app routes tray-originated failures here when
+        the window is on screen."""
+        self._show_error(message)
+
     def _show_error(self, message: str) -> None:
         """A refused or rejected write surfaces inline, never silently — and the
         controls snap back, so a failed click never leaves a button claiming

@@ -9,7 +9,8 @@ EC directly (all hardware access lives in `../daemon`).
 ```sh
 # needs the daemon running (see ../daemon), plus python3-gi + GTK4/libadwaita
 # introspection (gir1.2-gtk-4.0, gir1.2-adw-1)
-PYTHONPATH=. python3 -m gigactl_gui
+PYTHONPATH=. python3 -m gigactl_gui           # open the window
+PYTHONPATH=. python3 -m gigactl_gui --tray    # start hidden in the tray
 ```
 
 Launches the **Overview**: a model-verification banner, a live hero (CPU/GPU

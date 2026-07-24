@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=GigaControl
+GenericName=Fan and Keyboard Control
+Comment=Control the fans and keyboard backlight on Gigabyte G5/G6 laptops
+Exec=gigactl-gui
+Icon=io.github.smairio.gigactl
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=fan;fans;cooling;temperature;keyboard;backlight;rgb;gigabyte;
+StartupNotify=true
+StartupWMClass=io.github.smairio.gigactl

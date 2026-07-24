@@ -1,0 +1,14 @@
+[Desktop Entry]
+# Installed to /etc/xdg/autostart/ so the tray starts hidden at login on every
+# desktop (freedesktop Autostart spec). On systemd sessions such as Ubuntu GNOME,
+# systemd-xdg-autostart-generator turns this into a supervised user unit for
+# free. A user can opt out by placing a same-named file containing Hidden=true in
+# ~/.config/autostart/.
+Type=Application
+Name=GigaControl (tray)
+Comment=Keep fan and keyboard control in the system tray
+Exec=gigactl-gui --tray
+Icon=io.github.smairio.gigactl
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
