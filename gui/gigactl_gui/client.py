@@ -63,6 +63,24 @@ class KeyboardSnapshot:
         return (self.r, self.g, self.b)
 
 
+@dataclass(frozen=True)
+class CurveSnapshot:
+    """The daemon's ``Curves`` property — the shape the editor loads. Empty point
+    lists mean the engine is driving nothing (firmware or a manual override)."""
+    linked: bool
+    cpu: list[tuple[int, int]]
+    gpu: list[tuple[int, int]]
+
+    @classmethod
+    def from_tuple(cls, values) -> CurveSnapshot:
+        if len(values) != 3:
+            raise ValueError(f"expected 3 curve fields, got {len(values)}")
+        linked, cpu, gpu = values
+        return cls(bool(linked),
+                   [(int(t), int(d)) for t, d in cpu],
+                   [(int(t), int(d)) for t, d in gpu])
+
+
 class DaemonClient:
     """Live view of the daemon. Callbacks fire on the GLib main loop:
 
@@ -139,6 +157,18 @@ class DaemonClient:
         v = self._proxy.get_cached_property("ActiveProfile")
         return v.get_string() if v is not None else None
 
+    def curves(self) -> CurveSnapshot | None:
+        if not self._proxy:
+            return None
+        v = self._proxy.get_cached_property("Curves")
+        if v is None:
+            return None
+        try:
+            return CurveSnapshot.from_tuple(v.unpack())
+        except (ValueError, TypeError) as exc:
+            print(f"gigactl-gui: bad Curves property: {exc}", flush=True)
+            return None
+
     def keyboard_state(self) -> KeyboardSnapshot | None:
         if not self._proxy:
             return None
@@ -157,6 +187,10 @@ class DaemonClient:
 
     def restore_firmware(self) -> None:
         self._call("RestoreFirmware", None)
+
+    def set_curve(self, which: str, points: list[tuple[int, int]],
+                  linked: bool) -> None:
+        self._call("SetCurve", GLib.Variant("(sa(uu)b)", (which, points, linked)))
 
     def set_keyboard_color(self, r: int, g: int, b: int) -> None:
         self._call("SetKeyboardColor", GLib.Variant("(uuu)", (r, g, b)))

@@ -63,6 +63,9 @@ INTROSPECTION_XML = f"""
     <property name="ActiveProfile" type="s" access="read"/>
     <!-- (enabled, r, g, b, brightness_pct) — what the GUI shows as selected -->
     <property name="KeyboardState" type="(buuuu)" access="read"/>
+    <!-- (linked, cpu_points, gpu_points) — the shape the curve editor loads.
+         Empty point lists mean the engine is driving nothing (firmware/manual). -->
+    <property name="Curves" type="(ba(uu)a(uu))" access="read"/>
   </interface>
 </node>
 """
@@ -75,6 +78,16 @@ def _keyboard_variant(kbd: keyboard.KeyboardState | None) -> GLib.Variant:
     itself boots with, which is honest rather than a guess."""
     k = kbd or keyboard.KeyboardState()
     return GLib.Variant("(buuuu)", (k.enabled, k.r, k.g, k.b, k.brightness_pct))
+
+
+def _curves_variant(engine) -> GLib.Variant:
+    """Wire shape for the ``Curves`` property: the curves the engine is actually
+    driving, so opening the editor on a named profile shows that profile's shape
+    rather than an invented one. Firmware/manual report empty lists, because in
+    those states the engine drives nothing."""
+    cpu = [tuple(p) for p in engine.curve_for(curve.CPU_FAN)]
+    gpu = [tuple(p) for p in engine.curve_for(curve.GPU_FAN)]
+    return GLib.Variant("(ba(uu)a(uu))", (engine.linked, cpu, gpu))
 
 
 class Daemon:
@@ -208,6 +221,8 @@ class Daemon:
             return GLib.Variant("s", self.engine.profile)
         if prop == "KeyboardState":
             return _keyboard_variant(self.keyboard)
+        if prop == "Curves":
+            return _curves_variant(self.engine)
         return None
 
     def _notify_properties(self, **changed: GLib.Variant) -> None:
@@ -227,8 +242,11 @@ class Daemon:
         except Exception as exc:
             print(f"gigactld: could not emit PropertiesChanged: {exc}", flush=True)
 
-    def _notify_profile(self) -> None:
-        self._notify_properties(ActiveProfile=GLib.Variant("s", self.engine.profile))
+    def _notify_fan_state(self) -> None:
+        """Profile and curves always change together — one emission covers both."""
+        self._notify_properties(
+            ActiveProfile=GLib.Variant("s", self.engine.profile),
+            Curves=_curves_variant(self.engine))
 
     def _notify_keyboard(self) -> None:
         self._notify_properties(KeyboardState=_keyboard_variant(self.keyboard))
@@ -293,7 +311,7 @@ class Daemon:
         # NOT persist it; the last real profile stays saved and is restored on
         # the next start/reboot.
         self.engine.set_manual()
-        self._notify_profile()
+        self._notify_fan_state()
         invocation.return_value(None)
 
     def _restore_firmware(self, sender, invocation) -> None:
@@ -303,7 +321,7 @@ class Daemon:
         for f in fans.FANS:
             fans.restore_auto(self.ec, f)
         self._persist()
-        self._notify_profile()
+        self._notify_fan_state()
         invocation.return_value(None)
 
     def _verify(self, targets, target_raw: int) -> list:
@@ -369,7 +387,7 @@ class Daemon:
         else:
             self._apply_now()  # take effect immediately, not on the next tick
         self._persist()
-        self._notify_profile()
+        self._notify_fan_state()
         invocation.return_value(None)
 
     def _set_curve(self, sender, params, invocation) -> None:
@@ -383,7 +401,7 @@ class Daemon:
             return
         self._apply_now()
         self._persist()
-        self._notify_profile()
+        self._notify_fan_state()
         invocation.return_value(None)
 
     # --- keyboard methods ----------------------------------------------------

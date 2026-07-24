@@ -48,6 +48,19 @@ _CSS = """
    the exact RGB that will be sent to the backlight. */
 .swatch { padding: 3px; min-width: 26px; min-height: 26px; border-radius: 99px; }
 .swatch.selected { outline: 2px solid @accent_color; outline-offset: 1px; }
+
+/* Custom… is a plain button (it opens the curve editor), so it cannot be
+   :checked — .chosen gives it the same fill when that curve is what is running. */
+.profile-btn.chosen { background-color: @accent_bg_color; color: @accent_fg_color; }
+.profile-btn.chosen .profile-sub { opacity: 0.85; }
+
+/* Curve editor */
+.curvebox {
+  background-color: @card_bg_color; border-radius: 11px; padding: 14px;
+}
+.axis-tick { font-size: 10.5px; opacity: 0.55; font-feature-settings: "tnum"; }
+/* the curve plot reads its own colour to paint with (see curve_view._accent) */
+.curve-accent { color: @accent_color; }
 """
 
 

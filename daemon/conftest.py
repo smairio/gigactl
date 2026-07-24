@@ -81,13 +81,19 @@ class Invocation:
 
 
 @pytest.fixture
-def make_daemon():
+def make_daemon(tmp_path):
     """Factory for a Daemon wired to fakes. ``connected=False`` leaves ``_conn``
-    unset, which is the pre-bus state."""
+    unset, which is the pre-bus state. State persists under ``tmp_path`` so a
+    test never reads or writes the real /var/lib/gigactl/state.json."""
     from gigactld.service import Daemon
 
+    count = 0
+
     def factory(connected: bool = True):
+        nonlocal count
+        count += 1
         daemon = Daemon(FakeEc(), authorizer=AllowAllAuthorizer())
+        daemon.state_path = str(tmp_path / f"state{count}.json")
         if connected:
             daemon._conn = RecordingConn()
         return daemon

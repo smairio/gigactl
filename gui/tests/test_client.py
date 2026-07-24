@@ -2,7 +2,7 @@
 control call does when the daemon is not there."""
 import pytest
 
-from gigactl_gui.client import DaemonClient, KeyboardSnapshot, Telemetry
+from gigactl_gui.client import CurveSnapshot, DaemonClient, KeyboardSnapshot, Telemetry
 
 
 # --- telemetry ---------------------------------------------------------------
@@ -33,6 +33,25 @@ def test_keyboard_snapshot_rejects_wrong_arity():
         KeyboardSnapshot.from_tuple((True, 1, 2))
 
 
+# --- curves -----------------------------------------------------------------
+
+def test_curve_snapshot_maps_the_property_tuple():
+    cs = CurveSnapshot.from_tuple((False, [(40, 20), (95, 90)], [(40, 50)]))
+    assert cs.linked is False
+    assert cs.cpu == [(40, 20), (95, 90)]
+    assert cs.gpu == [(40, 50)]
+
+
+def test_curve_snapshot_tolerates_empty_curves():
+    cs = CurveSnapshot.from_tuple((True, [], []))
+    assert cs.cpu == [] and cs.gpu == []   # firmware/manual drive nothing
+
+
+def test_curve_snapshot_rejects_wrong_arity():
+    with pytest.raises(ValueError):
+        CurveSnapshot.from_tuple((True, []))
+
+
 # --- control calls with no daemon -------------------------------------------
 
 def _errors_from(action) -> list[str]:
@@ -48,7 +67,8 @@ def _errors_from(action) -> list[str]:
     lambda c: c.set_keyboard_color(255, 0, 0),
     lambda c: c.set_keyboard_brightness(50),
     lambda c: c.set_keyboard_enabled(True),
-], ids=["profile", "colour", "brightness", "enabled"])
+    lambda c: c.set_curve("cpu", [(40, 30)], True),
+], ids=["profile", "colour", "brightness", "enabled", "curve"])
 def test_control_call_without_daemon_reports_not_running(action):
     seen = _errors_from(action)
     assert seen, "a control call with no daemon must surface an error"

@@ -1,10 +1,11 @@
-"""The main window: the Overview (model banner, live hero, working controls).
+"""The main window: the Overview, and the navigation host for screen two.
 
 Layout follows DESIGN.md, top-to-bottom, beginner-first: the verification
-banner, the live-state hero, the fan-profile row, then the keyboard light. The
-custom-curve screen is a later ticket, so ``Custom…`` has no button yet — but a
-saved custom curve (or a manual override) is still named honestly in the "Now:"
-label rather than silently showing nothing selected.
+banner, the live-state hero, the fan-profile row, then the keyboard light.
+``Custom…`` opens the curve editor (:mod:`curve_page`) through an
+``Adw.NavigationView``, which supplies the "back to overview" affordance. A
+``manual`` override has no button of its own, so it is named in the "Now:" label
+rather than leaving the row silently blank.
 
 Two rules the wiring depends on:
 
@@ -27,6 +28,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 from . import palette, profiles, temperature  # noqa: E402
 from .client import DaemonClient, Telemetry  # noqa: E402
+from .curve_page import CurvePage  # noqa: E402
 from .gauge import TempGauge  # noqa: E402
 from .model import Model, Support  # noqa: E402
 from .preview import KeyboardPreview  # noqa: E402
@@ -71,6 +73,13 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._resync_source = 0
         self._controls: list[Gtk.Widget] = []
 
+        # The client exists before the widgets because the curve page talks to
+        # it; nothing reaches the bus until start() at the end.
+        self._client = DaemonClient(on_telemetry=self._on_telemetry,
+                                    on_availability=self._on_availability,
+                                    on_state=self._sync_from_daemon,
+                                    on_error=self._show_error)
+
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         content.set_margin_top(20)
         content.set_margin_bottom(20)
@@ -86,19 +95,22 @@ class OverviewWindow(Adw.ApplicationWindow):
         clamp = Adw.Clamp(maximum_size=820, child=content)
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                       child=clamp, vexpand=True)
-        self._toasts = Adw.ToastOverlay(child=scroller)
-
         toolbar = Adw.ToolbarView()
         toolbar.add_top_bar(Adw.HeaderBar())
-        toolbar.set_content(self._toasts)
-        self.set_content(toolbar)
+        toolbar.set_content(scroller)
 
-        # Live data + control results. Callbacks fire on the GLib main loop, so
-        # they touch widgets directly.
-        self._client = DaemonClient(on_telemetry=self._on_telemetry,
-                                    on_availability=self._on_availability,
-                                    on_state=self._sync_from_daemon,
-                                    on_error=self._show_error)
+        overview = Adw.NavigationPage(title="GigaControl", tag="overview",
+                                      child=toolbar)
+        self._curve_page = CurvePage(self._client)
+        self._nav = Adw.NavigationView()
+        self._nav.add(overview)
+        self._nav.add(self._curve_page)
+
+        # Toasts live above the whole stack so a refused write is visible on
+        # whichever screen the user is looking at.
+        self._toasts = Adw.ToastOverlay(child=self._nav)
+        self.set_content(self._toasts)
+
         self._update_sensitivity()
         self.connect("close-request", self._on_close)
         self._client.start()
@@ -109,6 +121,7 @@ class OverviewWindow(Adw.ApplicationWindow):
             if source:
                 GLib.source_remove(source)
         self._brightness_source = self._resync_source = 0
+        self._curve_page.cancel_pending()
         return False  # let the close proceed
 
     # --- construction --------------------------------------------------------
@@ -214,6 +227,24 @@ class OverviewWindow(Adw.ApplicationWindow):
             self._profile_buttons[profile.id] = button
             self._controls.append(button)
 
+        # Custom... is a doorway, not a profile: it opens the curve editor
+        # rather than calling SetProfile (selecting 'custom' with no curve set
+        # would be refused by the daemon anyway).
+        self._custom_button = Gtk.Button()
+        self._custom_button.add_css_class("profile-btn")
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        name = Gtk.Label(label="Custom…")
+        name.add_css_class("profile-name")
+        subtitle = Gtk.Label(label="edit curve")
+        subtitle.add_css_class("profile-sub")
+        inner.append(name)
+        inner.append(subtitle)
+        self._custom_button.set_child(inner)
+        self._custom_button.set_tooltip_text("Draw your own temperature curve")
+        self._custom_button.connect("clicked", self._on_custom_clicked)
+        row.append(self._custom_button)
+        self._controls.append(self._custom_button)
+
         escape = Gtk.Label(
             label="Firmware hands the fans back to the laptop — always one click away.",
             xalign=0.0, wrap=True)
@@ -317,6 +348,10 @@ class OverviewWindow(Adw.ApplicationWindow):
             return
         self._client.set_profile(profile_id)
 
+    def _on_custom_clicked(self, _button) -> None:
+        self._curve_page.sync_from_daemon()
+        self._nav.push_by_tag("curve")
+
     def _on_switch_toggled(self, switch: Gtk.Switch, _param) -> None:
         if self._syncing:
             return
@@ -381,10 +416,17 @@ class OverviewWindow(Adw.ApplicationWindow):
                 if target is not None:
                     target.set_active(True)  # the group clears the others
                 else:
-                    # custom / manual: no button represents it, so show none
+                    # custom / manual: no toggle represents it, so show none
                     # selected rather than pretending one of these is active
                     for button in self._profile_buttons.values():
                         button.set_active(False)
+                # Custom... is a plain button, so it cannot be :checked; mark it
+                # so the row still shows where the machine actually is.
+                if profile == profiles.CUSTOM:
+                    self._custom_button.add_css_class("chosen")
+                else:
+                    self._custom_button.remove_css_class("chosen")
+            self._curve_page.sync_from_daemon()
             keyboard = self._client.keyboard_state()
             if keyboard:
                 self._switch.set_active(keyboard.enabled)
@@ -441,6 +483,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._gpu_rpm.set_text(_rpm(t.fan2_rpm))
         self._cpu_duty.set_text(f"{t.fan1_duty_pct}% duty")
         self._gpu_duty.set_text(f"{t.fan2_duty_pct}% duty")
+        self._curve_page.on_telemetry(t)
 
     def _on_availability(self, available: bool) -> None:
         if not available:
@@ -454,6 +497,7 @@ class OverviewWindow(Adw.ApplicationWindow):
         usable = supported and self._client.available
         for widget in self._controls:
             widget.set_sensitive(usable)
+        self._curve_page.set_controls_sensitive(usable)
 
     def _show_error(self, message: str) -> None:
         """A refused or rejected write surfaces inline, never silently — and the

@@ -76,3 +76,41 @@ def test_manual_duty_notifies_profile_changed(make_daemon):
 def test_notify_without_connection_is_safe(make_daemon):
     d = make_daemon(connected=False)  # _conn stays None
     d._notify_properties(ActiveProfile=GLib.Variant("s", "quiet"))  # must not raise
+
+
+# --- Curves: what the curve editor loads and follows ------------------------
+
+def test_curves_property_reports_the_active_profile_shape(make_daemon):
+    from gigactld import curve
+    d = make_daemon()
+    d.engine.set_profile("balanced")
+    linked, cpu, gpu = _get(d, "Curves").unpack()
+    assert linked is True
+    assert [tuple(p) for p in cpu] == curve.PROFILES["balanced"]
+    assert cpu == gpu  # linked profiles drive both fans identically
+
+
+def test_curves_property_is_empty_on_firmware(make_daemon):
+    d = make_daemon()  # firmware by default: the engine drives nothing
+    linked, cpu, gpu = _get(d, "Curves").unpack()
+    assert cpu == [] and gpu == []
+
+
+def test_curves_property_exposes_split_curves(make_daemon):
+    d = make_daemon()
+    d.engine.set_custom(cpu_points=[(40, 20), (95, 90)],
+                        gpu_points=[(40, 50), (95, 100)], linked=False)
+    linked, cpu, gpu = _get(d, "Curves").unpack()
+    assert linked is False
+    assert cpu != gpu
+
+
+def test_set_curve_notifies_curves_and_profile(make_daemon):
+    d = make_daemon()
+    points = [(40, 25), (55, 35), (70, 55), (85, 80), (95, 100)]
+    d._set_curve(None, GLib.Variant("(sa(uu)b)", ("cpu", points, True)), Invocation())
+    _iface, props, _inv = d._conn.properties_changed()
+    assert props["ActiveProfile"] == "custom"
+    linked, cpu, _gpu = props["Curves"]
+    assert linked is True
+    assert [tuple(p) for p in cpu] == points
