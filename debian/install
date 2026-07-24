@@ -7,6 +7,9 @@ gui/gigactl_gui/*.py                            usr/lib/gigactl/gigactl_gui
 # /usr/bin/gigactld and /usr/bin/gigactl-gui are symlinks to this one script
 # (debian/links); it dispatches on the name it was invoked under.
 debian/bin/launcher                             usr/lib/gigactl
+# The plumbing gfan and gkbd source; they look next to themselves first (a
+# checkout), then here.
+gigactl-cli-lib.sh                              usr/lib/gigactl
 gfan                                            usr/bin
 gkbd                                            usr/bin
 

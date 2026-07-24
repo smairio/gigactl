@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 from dataclasses import dataclass
@@ -26,6 +27,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 BUS = "io.github.smairio.gigactl"
+
+
+def source_text(rel: str) -> str:
+    """A repo file as text, for assertions about the scripts' own source."""
+    return (ROOT / rel).read_text()
 
 # What the fake daemon answers property reads with. Six numbers in the Telemetry
 # signal's order: cpu, gpu, fan1 rpm, fan2 rpm, fan1 duty %, fan2 duty %.
@@ -37,8 +43,11 @@ DEFAULT_PROPS = {
 }
 
 _BUSCTL = r'''#!/usr/bin/python3
-"""Recording stand-in for busctl: answers NameHasOwner from STUB_DAEMON, serves
-canned property reads, and logs every call."""
+"""Recording stand-in for busctl: answers NameHasOwner from STUB_DAEMON ("1",
+"0", "error" — the bus call fails, or "garbage" — it answers nonsense), serves
+canned property reads, and logs every call. STUB_FAIL_METHOD makes a method
+fail; STUB_FAIL_WHEN narrows that to calls whose arguments contain it, so a test
+can fail the second of two calls."""
 import json, os, sys
 
 args = sys.argv[1:]
@@ -48,9 +57,18 @@ with open(log, "a") as f:
 
 props = json.loads(os.environ.get("STUB_PROPS", "{}"))
 fail = os.environ.get("STUB_FAIL_METHOD", "")
+fail_when = os.environ.get("STUB_FAIL_WHEN", "")
+daemon = os.environ.get("STUB_DAEMON", "0")
 
 if "NameHasOwner" in args:
-    print("b true" if os.environ.get("STUB_DAEMON") == "1" else "b false")
+    if daemon == "error":
+        print("Failed to connect to system bus: No such file or directory",
+              file=sys.stderr)
+        sys.exit(1)
+    if daemon == "garbage":
+        print("wat")
+        sys.exit(0)
+    print("b true" if daemon == "1" else "b false")
     sys.exit(0)
 if "get-property" in args:
     name = args[-1]
@@ -61,7 +79,7 @@ if "get-property" in args:
     sys.exit(0)
 if "call" in args:
     method = args[args.index("call") + 4]
-    if method == fail:
+    if method == fail and (not fail_when or fail_when in " ".join(args)):
         print(f"Call failed: {os.environ.get('STUB_FAIL_MESSAGE', 'refused')}",
               file=sys.stderr)
         sys.exit(1)
@@ -142,17 +160,39 @@ class Sandbox:
             path.write_text(body)
             path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
 
+    def _bin_without_busctl(self) -> Path:
+        """A PATH directory with the stubs and just enough coreutils, but no
+        busctl anywhere. PATH cannot simply drop /usr/bin — the scripts need cat,
+        readlink and friends before they ever look for busctl."""
+        d = self.dir / "bin-no-busctl"
+        if not d.exists():
+            d.mkdir()
+            for stub in ("ec_probe", "id", "sudo"):
+                (d / stub).symlink_to(self.bin / stub)
+            for tool in ("cat", "readlink", "dirname", "awk", "flock", "sleep",
+                         "mkdir", "rm", "date", "clear"):
+                real = shutil.which(tool)
+                if real:
+                    (d / tool).symlink_to(real)
+        return d
+
     # --- running -------------------------------------------------------------
-    def run(self, tool: str, *args: str, daemon: bool, regs: dict | None = None,
-            fail_method: str = "", fail_message: str = "refused",
-            unprivileged: bool = False, extra_env: dict | None = None) -> Result:
+    def run(self, tool: str, *args: str, daemon: bool | str,
+            regs: dict | None = None,
+            fail_method: str = "", fail_when: str = "", fail_message: str = "refused",
+            unprivileged: bool = False, no_busctl: bool = False,
+            extra_env: dict | None = None) -> Result:
         env = dict(os.environ)
         env.update({
             "PATH": f"{self.bin}:{env['PATH']}",
             "STUB_LOG_DIR": str(self.logs),
-            "STUB_DAEMON": "1" if daemon else "0",
+            # bools keep their obvious meaning; a string ("error", "garbage")
+            # makes the detection call itself misbehave.
+            "STUB_DAEMON": daemon if isinstance(daemon, str)
+                           else ("1" if daemon else "0"),
             "STUB_PROPS": json.dumps(self.props),
             "STUB_FAIL_METHOD": fail_method,
+            "STUB_FAIL_WHEN": fail_when,
             "STUB_FAIL_MESSAGE": fail_message,
             "STUB_REGS": json.dumps(regs or {}),
             "GIGACTL_EC_LOCK": str(self.lock),
@@ -168,6 +208,8 @@ class Sandbox:
         if unprivileged:
             # let the script see a non-root uid, so the sudo re-exec is exercised
             (self.bin / "id").write_text("#!/bin/sh\necho 1000\n")
+        if no_busctl:
+            env["PATH"] = str(self._bin_without_busctl())
         env.update(extra_env or {})
         proc = subprocess.run([str(ROOT / tool), *args], env=env,
                               capture_output=True, text=True, timeout=90)

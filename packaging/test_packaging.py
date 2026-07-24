@@ -204,7 +204,11 @@ def test_the_symbolic_icon_is_monochrome():
 
 @pytest.mark.parametrize("dependency", ["python3-gi", "gir1.2-gtk-4.0",
                                         "gir1.2-adw-1", "${python3:Depends}",
-                                        "${misc:Depends}"])
+                                        "${misc:Depends}",
+                                        # busctl: the CLIs refuse to touch the EC
+                                        # when they cannot ask the bus about the
+                                        # daemon, so it must always be there
+                                        "systemd"])
 def test_runtime_dependencies_are_declared(dependency):
     assert dependency in control_field("Depends")
 

@@ -8,16 +8,19 @@ ec_probe log is *empty*, not merely that the D-Bus call happened.
 """
 from __future__ import annotations
 
+from conftest import source_text
+
 DOORBELL = (0xF8, 0xC1)
 
 
 # --- with the daemon up -----------------------------------------------------
 
 def test_setting_a_duty_goes_through_the_daemon_and_touches_no_registers(sandbox):
+    """One call with selector 0 (= both fans), so the daemon verifies and — on a
+    refusal — reverts the pair together; two calls could strand fan1 alone."""
     result = sandbox.run("gfan", "70", daemon=True)
     assert result.returncode == 0, result.output
-    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "1", "70"],
-                                    ["SetFanDuty", "uu", "2", "70"]]
+    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "0", "70"]]
     assert sandbox.ec_calls == []
 
 
@@ -27,10 +30,23 @@ def test_two_percentages_map_to_the_two_fans(sandbox):
                                     ["SetFanDuty", "uu", "2", "90"]]
 
 
+def test_a_refused_second_duty_reverts_rather_than_stranding_fan1(sandbox):
+    """Split duties need two calls; if the second is refused, fan1 is already
+    manual — hand both back to firmware, the way direct mode's revert_auto does."""
+    result = sandbox.run("gfan", "40", "90", daemon=True,
+                         fail_method="SetFanDuty", fail_when="uu 2",
+                         fail_message="EC refused the duty write")
+    assert result.returncode != 0
+    assert "revert" in result.output.lower()
+    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "1", "40"],
+                                    ["SetFanDuty", "uu", "2", "90"],
+                                    ["RestoreFirmware"]]
+    assert sandbox.ec_calls == []
+
+
 def test_max_asks_for_full_duty_on_both_fans(sandbox):
     sandbox.run("gfan", "max", daemon=True)
-    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "1", "100"],
-                                    ["SetFanDuty", "uu", "2", "100"]]
+    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "0", "100"]]
     assert sandbox.ec_calls == []
 
 
@@ -73,7 +89,19 @@ def test_a_refusal_from_the_daemon_is_reported_and_nothing_is_written(sandbox):
                          fail_message="EC refused the duty write")
     assert result.returncode != 0
     assert "EC refused the duty write" in result.output
+    assert "sudo" not in result.output  # the remedy hint is for auth failures only
     assert sandbox.ec_calls == []
+
+
+def test_an_authorization_refusal_points_at_its_remedy(sandbox):
+    """Over SSH there is no polkit agent, so allow_inactive=auth_admin refuses —
+    but root is authorized outright, so 'run it with sudo' is the way out. The
+    old script sudo'd implicitly; the message has to carry that knowledge now."""
+    result = sandbox.run("gfan", "70", daemon=True, fail_method="SetFanDuty",
+                         fail_message="not authorized to control the fans")
+    assert result.returncode != 0
+    assert "not authorized" in result.output
+    assert "sudo" in result.output
 
 
 def test_the_hot_and_slow_guard_uses_the_daemon_temperature(sandbox):
@@ -88,8 +116,36 @@ def test_force_overrides_the_hot_and_slow_guard_in_daemon_mode(sandbox):
     sandbox.props["Telemetry"] = "(uuuuuu) 91 60 4200 4000 60 56"
     result = sandbox.run("gfan", "20", "--force", daemon=True)
     assert result.returncode == 0, result.output
-    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "1", "20"],
-                                    ["SetFanDuty", "uu", "2", "20"]]
+    assert sandbox.dbus_calls() == [["SetFanDuty", "uu", "0", "20"]]
+
+
+# --- when it cannot tell ------------------------------------------------------
+
+def test_an_unanswerable_daemon_check_refuses_rather_than_writing(sandbox):
+    """The rule is 'never write the EC while the daemon is active'. A detection
+    that fails open would break it in exactly the situations where it matters —
+    so 'could not tell' refuses instead of falling back to direct."""
+    result = sandbox.run("gfan", "70", daemon="error")
+    assert result.returncode != 0
+    assert "cannot tell" in result.output
+    assert sandbox.ec_calls == []
+    assert sandbox.sudo_calls == []
+    assert sandbox.dbus_calls() == []
+
+
+def test_a_nonsense_answer_from_the_bus_also_refuses(sandbox):
+    result = sandbox.run("gfan", "70", daemon="garbage")
+    assert result.returncode != 0
+    assert "cannot tell" in result.output
+    assert sandbox.ec_calls == []
+
+
+def test_a_machine_without_busctl_refuses_rather_than_writing(sandbox):
+    result = sandbox.run("gfan", "70", daemon=False, no_busctl=True)
+    assert result.returncode != 0
+    assert "busctl not found" in result.output
+    assert sandbox.ec_calls == []
+    assert sandbox.sudo_calls == []
 
 
 # --- with no daemon ---------------------------------------------------------
@@ -162,11 +218,13 @@ def test_a_direct_write_proceeds_once_the_lock_is_free(sandbox):
     assert sandbox.ec_writes
 
 
-def test_the_lock_is_the_one_the_daemon_takes(sandbox):
-    """A different path would serialise nothing."""
-    from pathlib import Path
-    ec = (Path(__file__).resolve().parent.parent / "daemon/gigactld/ec.py").read_text()
-    assert 'LOCK_PATH = "/run/lock/gigactl-ec.lock"' in ec
+def test_the_lock_is_the_one_the_daemon_takes():
+    """A different path would serialise nothing. The lock lives once, in the
+    shared lib, and both scripts source that lib rather than carrying copies."""
+    assert 'LOCK_PATH = "/run/lock/gigactl-ec.lock"' in \
+        source_text("daemon/gigactld/ec.py")
+    assert "/run/lock/gigactl-ec.lock" in source_text("gigactl-cli-lib.sh")
     for tool in ("gfan", "gkbd"):
-        body = (Path(__file__).resolve().parent.parent / tool).read_text()
-        assert "/run/lock/gigactl-ec.lock" in body, tool
+        body = source_text(tool)
+        assert "gigactl-cli-lib.sh" in body, tool
+        assert "/run/lock/" not in body, f"{tool} carries its own lock path"

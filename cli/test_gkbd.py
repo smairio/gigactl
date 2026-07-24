@@ -97,6 +97,16 @@ def test_an_unknown_colour_is_refused_before_any_call(sandbox):
     assert sandbox.dbus_calls() == []
 
 
+# --- when it cannot tell ------------------------------------------------------
+
+def test_an_unanswerable_daemon_check_refuses_rather_than_writing(sandbox):
+    result = sandbox.run("gkbd", "red", daemon="error")
+    assert result.returncode != 0
+    assert "cannot tell" in result.output
+    assert sandbox.ec_calls == []
+    assert sandbox.sudo_calls == []
+
+
 # --- with no daemon ---------------------------------------------------------
 
 def test_without_a_daemon_it_writes_the_mailbox_in_the_ec_byte_order(sandbox):
@@ -130,6 +140,29 @@ def test_without_a_daemon_status_reads_its_own_store(sandbox):
     result = sandbox.run("gkbd", "status", daemon=False)
     assert "B=200" in result.stdout
     assert sandbox.properties_read() == []
+
+
+def test_without_a_daemon_off_sends_the_documented_master_disable(sandbox):
+    """PROTOCOL.md gotcha 1: brightness 0 — the old form — is silently ignored by
+    the EC before the first master enable of a boot, and it is not what the
+    daemon writes for SetKeyboardEnabled false. Both modes now send 0x0C/0x20."""
+    result = sandbox.run("gkbd", "off", daemon=False)
+    assert result.returncode == 0, result.output
+    writes = sandbox.ec_writes
+    assert (0xF9, 0x0C) in writes and (0xFA, 0x20) in writes
+    assert (0xF8, 0xC4) in writes
+    assert (0xF9, 0x06) not in writes, "off must not be a brightness write"
+
+
+def test_without_a_daemon_on_re_enables_and_reapplies_the_saved_state(sandbox):
+    sandbox.run("gkbd", "green", daemon=False)
+    sandbox.run("gkbd", "off", daemon=False)
+    before = len(sandbox.ec_writes)
+    result = sandbox.run("gkbd", "on", daemon=False)
+    assert result.returncode == 0, result.output
+    writes = sandbox.ec_writes[before:]
+    assert (0xFA, 0x3F) in writes           # master enable...
+    assert (0xFC, 255) in writes            # ...and green comes back (G -> FBF2)
 
 
 def test_a_missing_ec_probe_is_only_fatal_without_a_daemon(sandbox):

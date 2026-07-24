@@ -1,7 +1,7 @@
 #!/bin/bash
 # gkbd — keyboard backlight control for Gigabyte G6 KF (Clevo-ODM single-zone RGB)
 #
-# Two modes, chosen automatically:
+# Two modes, chosen by detect_mode (gigactl-cli-lib.sh):
 #
 #   daemon — the gigactl daemon owns io.github.smairio.gigactl, so it is the single
 #     writer of the EC *and* the single owner of the saved backlight state
@@ -9,30 +9,31 @@
 #     an unprivileged D-Bus client: no root, no ec_probe, no register writes — and
 #     it deliberately does not touch its own store, because two stores for one
 #     backlight is how a stale colour wins a race.
-#   direct — no daemon, so gkbd drives the EC itself as it always has, keeping its
-#     own store and holding /run/lock/gigactl-ec.lock so concurrent invocations
-#     serialise.
+#   direct — the daemon is definitely not running, so gkbd drives the EC itself as
+#     it always has, keeping its own store and holding the daemon's EC lock so
+#     concurrent invocations serialise. When it *cannot tell*, it refuses rather
+#     than guessing direct.
 #
 # Protocol (reverse-engineered 2026-07, cross-checked with tuxedo clevo-keyboard driver):
 #   master enable : FDAT=0x0C FBUF=0x3F  doorbell FCMD=0xC4   (required once; before it, LED cmds are ignored)
+#   master disable: FDAT=0x0C FBUF=0x20  doorbell FCMD=0xC4
 #   color         : FDAT=0x03 FBUF=BLUE FBF1=RED FBF2=GREEN doorbell FCMD=0xCA   (EC wants B,R,G order!)
 #   brightness    : FDAT=0x06 FBUF=level(0-255) doorbell FCMD=0xCA
 # Mailbox ports: FCMD=0xF8 FDAT=0xF9 FBUF=0xFA FBF1=0xFB FBF2=0xFC (doorbell written last)
 set -euo pipefail
 
-# Overridable only so cli/ can exercise both modes as an ordinary user in a tmp
-# directory; the defaults are the real locations.
+TOOL=gkbd
+# The shared plumbing (mode detection, D-Bus helpers, the EC lock): next to this
+# script in a checkout, in the package's private directory once installed.
+_LIB="$(dirname "$(readlink -f "$0")")/gigactl-cli-lib.sh"
+[ -r "$_LIB" ] || _LIB=/usr/lib/gigactl/gigactl-cli-lib.sh
+[ -r "$_LIB" ] || { echo "$TOOL: cannot find gigactl-cli-lib.sh" >&2; exit 1; }
+. "$_LIB"
+
+# Overridable only so cli/ can drive this as an ordinary user in a tmp directory.
 EP=${GKBD_EC_PROBE:-/usr/bin/ec_probe}
 STATE_DIR=${GKBD_STATE_DIR:-/var/lib/gkbd}
 STATE=$STATE_DIR/state
-LOCK=${GIGACTL_EC_LOCK:-/run/lock/gigactl-ec.lock}
-LOCK_WAIT=${GIGACTL_LOCK_WAIT:-10}
-
-BUS=io.github.smairio.gigactl
-OBJ=/io/github/smairio/gigactl
-IFACE=$BUS.Control
-
-die() { echo "gkbd: $*" >&2; exit 1; }
 
 MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
 VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)
@@ -49,26 +50,7 @@ model_check() {
   esac
 }
 
-# --- which mode ---------------------------------------------------------------
-
-daemon_owns_the_ec() {
-  command -v busctl >/dev/null 2>&1 || return 1
-  [ "$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus \
-        org.freedesktop.DBus NameHasOwner s "$BUS" 2>/dev/null)" = "b true" ]
-}
-
-# Both modes implement the same verbs as <mode>_<verb>; this is the only place the
-# choice is acted on.
-op() { "${MODE}_$1" "${@:2}"; }
-
 # --- daemon mode --------------------------------------------------------------
-
-call() { # $1=method, rest = signature and arguments
-  local method=$1 out; shift
-  if ! out=$(busctl --system call "$BUS" "$OBJ" "$IFACE" "$method" "$@" 2>&1); then
-    die "the daemon refused $method: ${out#Call failed: }"
-  fi
-}
 
 daemon_set_color() { call SetKeyboardColor uuu "$1" "$2" "$3"; }
 
@@ -79,8 +61,7 @@ daemon_set_enabled() { call SetKeyboardEnabled b "$1"; }
 
 daemon_status() {
   local out enabled r g b pct
-  out=$(busctl --system get-property "$BUS" "$OBJ" "$IFACE" KeyboardState 2>/dev/null) \
-    || die "could not read the keyboard state from the daemon"
+  out=$(prop KeyboardState) || die "could not read the keyboard state from the daemon"
   read -r _type enabled r g b pct <<<"$out"
   [ -n "${pct:-}" ] || die "unexpected keyboard state from the daemon: $out"
   echo "daemon: R=$r G=$g B=$b brightness=${pct}% ($([ "$enabled" = true ] && echo on || echo off))"
@@ -95,12 +76,6 @@ daemon_apply() {
 
 # --- direct mode --------------------------------------------------------------
 
-lock_ec() { # serialise a whole write sequence against other writers
-  exec 9>"$LOCK" || die "cannot open the EC lock $LOCK"
-  flock -w "$LOCK_WAIT" 9 || \
-    die "another gigactl EC writer is holding the lock $LOCK — try again."
-}
-
 send() { # $1=FDAT $2=FBUF [$3=FBF1 $4=FBF2] $5=doorbell
   "$EP" write 0xF9 "$1" >/dev/null
   "$EP" write 0xFA "$2" >/dev/null
@@ -110,6 +85,7 @@ send() { # $1=FDAT $2=FBUF [$3=FBF1 $4=FBF2] $5=doorbell
 }
 
 master_enable()  { send 0x0C 0x3F "" "" 0xC4; }
+master_disable() { send 0x0C 0x20 "" "" 0xC4; }
 set_color()  { send 0x03 "$3" "$1" "$2"; }  # args R G B -> EC order B,R,G
 set_bright() { send 0x06 "$1"; }
 
@@ -145,18 +121,20 @@ direct_set_brightness() { # $1=percent
 direct_set_enabled() { # $1=true|false
   lock_ec
   if [ "$1" = true ]; then
+    master_enable
     if [ -f "$STATE" ]; then
       local r g b br
       read -r r g b br < "$STATE"
-      master_enable
       set_bright "${br:-255}"
       set_color "$r" "$g" "$b"
     else
-      master_enable
       set_bright 255
     fi
   else
-    set_bright 0
+    # The documented disable (PROTOCOL.md gotcha 1) — the same write the daemon
+    # makes for SetKeyboardEnabled false. The old form, brightness 0, is silently
+    # ignored by the EC before the first master enable of a boot.
+    master_disable
   fi
 }
 
@@ -219,6 +197,7 @@ Usage:
 With the gigactl daemon running, gkbd drives it over D-Bus, needs no root, and the
 daemon is what remembers your colour across reboot and suspend. Without it, gkbd
 writes the EC directly, keeps its own saved state and re-runs itself under sudo.
+If it cannot tell whether the daemon is running, it refuses rather than guesses.
 EOF
 }
 
@@ -227,10 +206,8 @@ main() {
     ""|-h|--help|help) usage; return 0 ;;
   esac
 
-  if daemon_owns_the_ec; then
-    MODE=daemon
-  else
-    MODE=direct
+  detect_mode
+  if [ "$MODE" = direct ]; then
     # Only the direct path needs the tool and the privileges to use it.
     [ -x "$EP" ] || die "ec_probe not found (nbfc-linux package), and the gigactl daemon is not running"
     if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi

@@ -14,7 +14,8 @@ Gigabyte ships no Linux software for its G-series laptops. The firmware fan curv
 Both tools check for the `gigactl` daemon first. When it is running they drive it
 over D-Bus — no `sudo`, no `ec_probe`, and no risk of two writers taking turns on
 one EC mailbox. With no daemon they write the EC themselves as they always have,
-serialising on the same lock the daemon uses.
+serialising on the same lock the daemon uses. And when they *cannot tell* — no
+`busctl`, no answer from the bus — they refuse rather than guess.
 
 ## Supported hardware
 

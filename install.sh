@@ -11,8 +11,10 @@ die() { echo "install: $*" >&2; exit 1; }
 if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now gkbd-restore.service 2>/dev/null || true
   rm -f /usr/local/bin/gfan /usr/local/bin/gkbd \
+        /usr/lib/gigactl/gigactl-cli-lib.sh \
         /etc/systemd/system/gkbd-restore.service \
         /lib/systemd/system-sleep/gkbd
+  rmdir /usr/lib/gigactl 2>/dev/null || true  # the .deb may own it too
   rm -rf /var/lib/gkbd
   systemctl daemon-reload
   echo "gigactl uninstalled. (ec_probe/nbfc-linux left in place; remove with: apt remove nbfc-linux)"
@@ -44,6 +46,11 @@ fi
 # --- install ------------------------------------------------------------------
 install -m 755 "$DIR/gfan" /usr/local/bin/gfan
 install -m 755 "$DIR/gkbd" /usr/local/bin/gkbd
+# The plumbing both scripts source. They look next to themselves first, which
+# fails for these /usr/local/bin copies, then fall back to this path (the same
+# one the .deb uses).
+install -d /usr/lib/gigactl
+install -m 644 "$DIR/gigactl-cli-lib.sh" /usr/lib/gigactl/gigactl-cli-lib.sh
 install -m 644 "$DIR/systemd/gkbd-restore.service" /etc/systemd/system/gkbd-restore.service
 install -m 755 "$DIR/systemd/system-sleep-gkbd" /lib/systemd/system-sleep/gkbd
 systemctl daemon-reload

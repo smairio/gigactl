@@ -22,6 +22,7 @@ Depends:
  gir1.2-adw-1,
  dbus,
  polkitd,
+ systemd,
 Suggests: gnome-shell-extension-appindicator
 Description: fan and keyboard backlight control for Gigabyte G5/G6 laptops
  GigaControl gives Gigabyte G-series gaming laptops the fan and RGB keyboard
