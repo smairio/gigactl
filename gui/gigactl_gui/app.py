@@ -30,6 +30,23 @@ _CSS = """
 .rpm-value { font-size: 20px; font-weight: 800; font-feature-settings: "tnum"; }
 .eyebrow { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.55; }
 .metric-sub { font-size: 12px; opacity: 0.6; }
+.sec { font-size: 16px; font-weight: 800; }
+
+/* Fan-profile row: the active profile fills with accent; Firmware fills
+   neutral, because yielding to the hardware is a state, not a setting. */
+.profile-btn { padding: 8px 10px; }
+.profile-name { font-size: 13.5px; font-weight: 700; }
+.profile-sub { font-size: 11px; opacity: 0.6; }
+.profile-btn:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
+.profile-btn:checked .profile-sub { opacity: 0.85; }
+.profile-btn.firmware:checked {
+  background-color: alpha(@window_fg_color, 0.16); color: @window_fg_color;
+}
+
+/* Colour swatches: the button is just a frame — the circle inside is painted in
+   the exact RGB that will be sent to the backlight. */
+.swatch { padding: 3px; min-width: 26px; min-height: 26px; border-radius: 99px; }
+.swatch.selected { outline: 2px solid @accent_color; outline-offset: 1px; }
 """
 
 

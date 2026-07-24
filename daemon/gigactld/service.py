@@ -61,9 +61,20 @@ INTROSPECTION_XML = f"""
     </signal>
     <property name="DaemonVersion" type="s" access="read"/>
     <property name="ActiveProfile" type="s" access="read"/>
+    <!-- (enabled, r, g, b, brightness_pct) — what the GUI shows as selected -->
+    <property name="KeyboardState" type="(buuuu)" access="read"/>
   </interface>
 </node>
 """
+
+
+def _keyboard_variant(kbd: keyboard.KeyboardState | None) -> GLib.Variant:
+    """Wire shape for the ``KeyboardState`` property. The D-Bus adapter lives
+    here rather than on ``KeyboardState`` so the hardware module stays free of
+    GLib; when nothing has been set yet we report the firmware default the EC
+    itself boots with, which is honest rather than a guess."""
+    k = kbd or keyboard.KeyboardState()
+    return GLib.Variant("(buuuu)", (k.enabled, k.r, k.g, k.b, k.brightness_pct))
 
 
 class Daemon:
@@ -195,7 +206,31 @@ class Daemon:
             return GLib.Variant("s", __version__)
         if prop == "ActiveProfile":
             return GLib.Variant("s", self.engine.profile)
+        if prop == "KeyboardState":
+            return _keyboard_variant(self.keyboard)
         return None
+
+    def _notify_properties(self, **changed) -> None:
+        """Emit ``PropertiesChanged`` so a running GUI or tray reflects state it
+        did not set itself — another client, a boot restore, or a manual duty
+        override flipping the profile. Best-effort: a failed emit must never
+        break the call that triggered it."""
+        if self._conn is None:
+            return
+        try:
+            self._conn.emit_signal(
+                None, OBJECT_PATH,
+                "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                GLib.Variant("(sa{sv}as)", (INTERFACE, changed, [])),
+            )
+        except Exception as exc:
+            print(f"gigactld: could not emit PropertiesChanged: {exc}", flush=True)
+
+    def _notify_profile(self) -> None:
+        self._notify_properties(ActiveProfile=GLib.Variant("s", self.engine.profile))
+
+    def _notify_keyboard(self) -> None:
+        self._notify_properties(KeyboardState=_keyboard_variant(self.keyboard))
 
     def _method_call(self, conn, sender, path, iface, method, params, invocation):
         try:
@@ -257,6 +292,7 @@ class Daemon:
         # NOT persist it; the last real profile stays saved and is restored on
         # the next start/reboot.
         self.engine.set_manual()
+        self._notify_profile()
         invocation.return_value(None)
 
     def _restore_firmware(self, sender, invocation) -> None:
@@ -266,6 +302,7 @@ class Daemon:
         for f in fans.FANS:
             fans.restore_auto(self.ec, f)
         self._persist()
+        self._notify_profile()
         invocation.return_value(None)
 
     def _verify(self, targets, target_raw: int) -> list:
@@ -331,6 +368,7 @@ class Daemon:
         else:
             self._apply_now()  # take effect immediately, not on the next tick
         self._persist()
+        self._notify_profile()
         invocation.return_value(None)
 
     def _set_curve(self, sender, params, invocation) -> None:
@@ -344,6 +382,7 @@ class Daemon:
             return
         self._apply_now()
         self._persist()
+        self._notify_profile()
         invocation.return_value(None)
 
     # --- keyboard methods ----------------------------------------------------
@@ -370,6 +409,7 @@ class Daemon:
         keyboard.set_color(self.ec, r, g, b)
         self._remember_keyboard().record_colour(r, g, b)
         self._persist()
+        self._notify_keyboard()
         invocation.return_value(None)
 
     def _set_keyboard_brightness(self, sender, params, invocation) -> None:
@@ -382,6 +422,7 @@ class Daemon:
         keyboard.set_brightness(self.ec, percent)
         self._remember_keyboard().record_brightness(percent)
         self._persist()
+        self._notify_keyboard()
         invocation.return_value(None)
 
     def _set_keyboard_enabled(self, sender, params, invocation) -> None:
@@ -391,6 +432,7 @@ class Daemon:
         keyboard.set_enabled(self.ec, on)
         self._remember_keyboard().record_enabled(on)
         self._persist()
+        self._notify_keyboard()
         invocation.return_value(None)
 
     def stop(self) -> None:
