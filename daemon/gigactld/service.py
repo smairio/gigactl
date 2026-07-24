@@ -80,7 +80,7 @@ def _keyboard_variant(kbd: keyboard.KeyboardState | None) -> GLib.Variant:
     return GLib.Variant("(buuuu)", (k.enabled, k.r, k.g, k.b, k.brightness_pct))
 
 
-def _curves_variant(engine) -> GLib.Variant:
+def _curves_variant(engine: curve.ProfileEngine) -> GLib.Variant:
     """Wire shape for the ``Curves`` property: the curves the engine is actually
     driving, so opening the editor on a named profile shows that profile's shape
     rather than an invented one. Firmware/manual report empty lists, because in

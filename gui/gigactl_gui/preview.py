@@ -16,6 +16,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk  # noqa: E402
 
+from . import style  # noqa: E402
 from .backlight import intensity  # noqa: E402
 
 _WIDTH = 268
@@ -66,7 +67,7 @@ class KeyboardPreview(Adw.Bin):
     def _draw(self, _area, cr, width, height, *_data) -> None:
         r, g, b = (c / 255 for c in self._rgb)
         glow = self._glow if self._known else 0.0
-        dark = Adw.StyleManager.get_default().get_dark()
+        dark = style.is_dark()
 
         # the keyboard plate
         plate = 0.16 if not dark else 0.10

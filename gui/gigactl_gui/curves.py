@@ -5,10 +5,13 @@ closely enough that the editor never shows the user something the daemon would
 quietly change:
 
 * ``duty_for``/``predicted`` mirror the daemon's piecewise-linear lookup and its
-  safety floor, so the live annotation matches what the fans will really do;
+  safety floor — including the floor's CPU cross-check, so the annotation cannot
+  promise a duty the daemon will override;
 * ``move_point`` enforces the same monotonic rules the daemon's ``normalize``
   enforces (strictly rising temperatures, non-falling duties) *while dragging*,
-  rather than letting the user draw a shape that gets silently rewritten.
+  rather than letting the user draw a shape that gets silently rewritten;
+* ``seeded_from`` passes an already-valid curve through **untouched**. Only a
+  malformed one is coerced, and then by the daemon's own rules.
 
 Constants are duplicated from ``gigactld.curve`` on purpose: the two packages
 install separately, so this is a wire contract, not shared code. They must be
@@ -20,10 +23,14 @@ POINTS = 5
 FLOOR_PCT = 30
 FLOOR_TEMP_C = 85
 
-# The graph's axes. Temperatures below 40 °C are idle territory where the fans
-# have nothing to do, so the editable range starts there.
-TEMP_MIN = 40
+# The graph's drawn range. It starts at 30 °C to match the temperature scale's
+# own floor (``temperature.GAUGE_MIN_C``) — below that the fans have nothing to
+# do. The *daemon* accepts a first point as low as DAEMON_TEMP_MIN; such a curve
+# can only come from a hand-made D-Bus call, and the editor draws it clipped at
+# the left edge rather than rewriting it (see ``seeded_from``).
+TEMP_MIN = 30
 TEMP_MAX = 100
+DAEMON_TEMP_MIN = 0  # gigactld.curve.normalize's lower bound for the first point
 
 Point = tuple[int, int]
 Curve = list[Point]
@@ -57,24 +64,43 @@ def duty_for(points: Curve, temp: float) -> int:
     return points[-1][1]
 
 
-def predicted(points: Curve, temp: float) -> int:
-    """What the fans will actually run at — the curve *plus* the daemon's floor,
-    so the annotation cannot promise a duty the daemon would override."""
+def predicted(points: Curve, temp: float, cpu_temp: float | None = None) -> int:
+    """What the fans will actually run at — the curve *plus* the daemon's floor.
+
+    The daemon engages the floor on ``max(source_temp, cpu_temp)``, so a GPU
+    curve is floored by a hot CPU too; pass ``cpu_temp`` to model that, or leave
+    it out when the curve's own fan *is* the CPU.
+    """
     duty = duty_for(points, temp)
-    if temp >= FLOOR_TEMP_C:
+    hottest = temp if cpu_temp is None else max(temp, cpu_temp)
+    if hottest >= FLOOR_TEMP_C:
         return max(duty, FLOOR_PCT)
     return duty
 
 
-def annotation(label: str, temp: int, points: Curve) -> str:
-    """The live read-out, e.g. "CPU now 91° → fans 78%"."""
-    return f"{label} now {temp}° → fans {predicted(points, temp)}%"
+def annotation(label: str, temp: int, points: Curve,
+               cpu_temp: float | None = None) -> str:
+    """The live read-out, e.g. ``"CPU now 66° → fans 45%"``."""
+    return f"{label} now {temp}° → fans {predicted(points, temp, cpu_temp)}%"
+
+
+def is_valid(points: Curve) -> bool:
+    """True when the daemon would keep this curve as-is: the right number of
+    points, temperatures strictly rising, duties never falling, duties in range.
+    """
+    if len(points) != POINTS:
+        return False
+    if any(not 0 <= d <= 100 for _, d in points):
+        return False
+    if any(t2 <= t1 for (t1, _), (t2, _) in zip(points, points[1:])):
+        return False
+    return all(d2 >= d1 for (_, d1), (_, d2) in zip(points, points[1:]))
 
 
 def move_point(points: Curve, index: int, temp: float, duty: float) -> Curve:
     """``points`` with point ``index`` dragged to (temp, duty), clamped so the
     curve stays valid: each temperature strictly between its neighbours', each
-    duty between theirs."""
+    duty between theirs. The first point may go as low as the drawn range."""
     if not 0 <= index < len(points):
         raise IndexError(f"no point {index} in a {len(points)}-point curve")
 
@@ -91,17 +117,23 @@ def move_point(points: Curve, index: int, temp: float, duty: float) -> Curve:
 
 def seeded_from(points: Curve | None) -> Curve:
     """The shape to open the editor with: whatever the daemon is driving, or the
-    default ramp when it is driving nothing (firmware/manual report no points)."""
+    default ramp when it is driving nothing (firmware/manual report no points).
+
+    A valid curve is returned **untouched**, even if it starts colder than the
+    drawn range — rewriting it here would mean the editor showed, and on the next
+    edit sent, a shape the user never chose.
+    """
     if not points:
         return list(DEFAULT_SEED)
-    return _normalise(points)
+    exact = [(int(t), int(d)) for t, d in points]
+    return exact if is_valid(exact) else _normalise(exact)
 
 
 def _normalise(points: Curve) -> Curve:
-    """Coerce to exactly ``POINTS`` rising points. The daemon does the
-    authoritative version of this; here it only has to make a loaded curve
-    drawable."""
-    pts = sorted((int(t), int(d)) for t, d in points)
+    """Coerce a malformed curve to exactly ``POINTS`` rising points, by the
+    daemon's rules (``gigactld.curve.normalize``) so both ends agree — note the
+    first point's lower bound is the daemon's, not the drawn range's."""
+    pts = sorted(points)
     while len(pts) < POINTS:  # spread duplicates rather than inventing a shape
         pts.append(pts[-1])
     if len(pts) > POINTS:
@@ -111,7 +143,7 @@ def _normalise(points: Curve) -> Curve:
     out: Curve = []
     last_d = 0
     for i, (t, d) in enumerate(pts):
-        lo = TEMP_MIN if i == 0 else out[-1][0] + 1
+        lo = DAEMON_TEMP_MIN if i == 0 else out[-1][0] + 1
         t = int(_clamp(t, lo, TEMP_MAX - (POINTS - 1 - i)))
         d = int(_clamp(max(d, last_d), 0, 100))
         out.append((t, d))
@@ -123,13 +155,19 @@ def _normalise(points: Curve) -> Curve:
 
 def to_pixel(temp: float, duty: float, width: float, height: float) -> tuple[float, float]:
     """(temp, duty) → (x, y) with the origin bottom-left: cold+slow at the
-    bottom-left, hot+fast at the top-right."""
+    bottom-left, hot+fast at the top-right. A point colder than ``TEMP_MIN``
+    maps to a negative x on purpose, so it draws clipped instead of moving."""
     x = (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN) * width
     y = height - (duty / 100) * height
     return (x, y)
 
 
 def from_pixel(x: float, y: float, width: float, height: float) -> tuple[float, float]:
+    """(x, y) → (temp, duty). A zero-sized area (before the first allocation)
+    has no meaningful mapping, so it answers with the bottom-left corner rather
+    than dividing by zero inside a gesture callback."""
+    if width <= 0 or height <= 0:
+        return (float(TEMP_MIN), 0.0)
     temp = TEMP_MIN + _clamp(x / width, 0.0, 1.0) * (TEMP_MAX - TEMP_MIN)
     duty = _clamp((height - y) / height, 0.0, 1.0) * 100
     return (temp, duty)

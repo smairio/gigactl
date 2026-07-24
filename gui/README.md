@@ -29,12 +29,22 @@ follow the system automatically (libadwaita).
   dragging, and the graph↔value mapping.
 - `errors.py` — D-Bus error → one short plain-English sentence.
 - `client.py` — system-bus client: `Telemetry`, property read-back, control calls.
+- `style.py` — the two theme queries the Cairo widgets share (dark mode, accent).
 - `gauge.py` / `preview.py` / `curve_view.py` — the Cairo widgets (temperature
   ring, keyboard glow, draggable curve plot).
 - `curve_page.py` — screen two: Linked⇄Split, live annotation, floor note,
   Firmware-auto escape.
 - `window.py` / `app.py` / `__main__.py` — the Overview, the navigation host, the
   app and entry point.
+
+## Editing the curve without a mouse
+
+The graph is focusable. With focus on it: `←`/`→` move the selected point's
+temperature, `↑`/`↓` its speed (Shift for bigger steps), `Page Up`/`Page Down`
+pick a point, `Home`/`End` jump to the first/last. The accessible label always
+names the selected point and its values, so the shape is legible to a screen
+reader — DESIGN.md requires every control to be reachable this way, and a graph
+is the one control where mouse-only would lock people out entirely.
 
 ## Why the curve maths is duplicated
 

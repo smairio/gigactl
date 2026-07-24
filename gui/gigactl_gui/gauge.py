@@ -16,17 +16,12 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk  # noqa: E402
 
-from . import temperature  # noqa: E402
+from . import style, temperature  # noqa: E402
 
 _SIZE = 126
 _ARC_START = math.radians(135)   # leave the arc open at the bottom
 _ARC_SWEEP = math.radians(270)
 _LINE = 12
-
-
-def _hex_to_rgb(h: str) -> tuple[float, float, float]:
-    h = h.lstrip("#")
-    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
 class TempGauge(Adw.Bin):
@@ -65,16 +60,12 @@ class TempGauge(Adw.Bin):
         if temp_c is None:
             self._num.set_markup("<span>–</span>")
         else:
-            color = temperature.color_hex(temp_c, dark=self._dark())
+            color = temperature.color_hex(temp_c, dark=style.is_dark())
             self._num.set_markup(
                 f'<span foreground="{color}">'
                 f'{int(round(temp_c))}<span size="small">°</span></span>'
             )
         self._area.queue_draw()
-
-    @staticmethod
-    def _dark() -> bool:
-        return Adw.StyleManager.get_default().get_dark()
 
     def _draw(self, _area, cr, width, height, *_data) -> None:
         cx, cy = width / 2, height / 2
@@ -89,7 +80,7 @@ class TempGauge(Adw.Bin):
 
         if self._temp is None:
             return
-        r, g, b = _hex_to_rgb(temperature.color_hex(self._temp, dark=self._dark()))
+        r, g, b = temperature.color_rgb(self._temp, dark=style.is_dark())
         cr.set_source_rgb(r, g, b)
         cr.arc(cx, cy, radius, _ARC_START,
                _ARC_START + _ARC_SWEEP * temperature.gauge_fraction(self._temp))

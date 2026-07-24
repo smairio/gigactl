@@ -45,6 +45,13 @@ def color_hex(temp_c: float, *, dark: bool = False) -> str:
     return dark_hex if dark else light
 
 
+def color_rgb(temp_c: float, *, dark: bool = False) -> tuple[float, float, float]:
+    """The same colour as 0–1 components, for the widgets that paint with Cairo
+    (so nobody re-parses the hex)."""
+    h = color_hex(temp_c, dark=dark).lstrip("#")
+    return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255)
+
+
 def gauge_fraction(temp_c: float, lo: int = GAUGE_MIN_C, hi: int = GAUGE_MAX_C) -> float:
     """Fraction (0–1) of the gauge arc to fill for this temperature, clamped."""
     return max(0.0, min(1.0, (temp_c - lo) / (hi - lo)))

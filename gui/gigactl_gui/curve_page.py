@@ -16,7 +16,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from . import curves, temperature  # noqa: E402
 from .client import DaemonClient, Telemetry  # noqa: E402
-from .curve_view import CurveView, axis_labels  # noqa: E402
+from .curve_view import CurveView  # noqa: E402
 
 # Long enough to coalesce a drag, short enough that the fans respond while the
 # finger is still down.
@@ -34,9 +34,16 @@ class CurvePage(Adw.NavigationPage):
         self._client = client
         self._linked = True
         self._editing = CPU
-        self._curves = {CPU: list(curves.DEFAULT_SEED), GPU: list(curves.DEFAULT_SEED)}
-        self._temps = {CPU: None, GPU: None}
+        self._curves: dict[str, curves.Curve] = {
+            CPU: list(curves.DEFAULT_SEED), GPU: list(curves.DEFAULT_SEED)}
+        self._temps: dict[str, int | None] = {CPU: None, GPU: None}
         self._syncing = False
+        # Whether there is a shape worth sending: the user has edited one, or the
+        # daemon already runs a custom curve. Without this, merely toggling
+        # Linked/Split would push the invented default seed and take the machine
+        # off firmware — a view-mode switch must not be an edit.
+        self._dirty = False
+        self._daemon_has_curve = False
         self._send_source = 0
         self._pending: tuple[str, curves.Curve, bool] | None = None
         self._controls: list[Gtk.Widget] = []
@@ -129,7 +136,6 @@ class CurvePage(Adw.NavigationPage):
         box.append(caption)
         box.append(self._fan_switcher)
         box.append(self._view)
-        box.append(axis_labels())
         return box
 
     def _build_footer(self) -> Gtk.Box:
@@ -169,7 +175,8 @@ class CurvePage(Adw.NavigationPage):
             self._curves[GPU] = list(self._curves[self._editing])
             self._curves[CPU] = list(self._curves[self._editing])
         self._refresh_view()
-        self._queue_send(self._editing, self._curves[self._editing])
+        if self._dirty or self._daemon_has_curve:
+            self._queue_send(self._editing, self._curves[self._editing])
 
     def _on_fan_toggled(self, button: Gtk.ToggleButton, fan: str) -> None:
         if not button.get_active():
@@ -178,10 +185,10 @@ class CurvePage(Adw.NavigationPage):
         self._refresh_view()
 
     def _on_curve_edited(self, points: curves.Curve) -> None:
+        self._dirty = True
         self._curves[self._editing] = points
         if self._linked:
-            other = GPU if self._editing == CPU else CPU
-            self._curves[other] = list(points)
+            self._curves[self._other()] = list(points)
         self._update_annotation()
         self._queue_send(self._editing, points)
 
@@ -215,15 +222,23 @@ class CurvePage(Adw.NavigationPage):
 
     # --- daemon state --------------------------------------------------------
     def sync_from_daemon(self) -> None:
+        # An edit of ours has not landed yet: adopting the daemon's older shape
+        # now would fight the drag that is still in flight.
+        if self._send_source:
+            return
         snapshot = self._client.curves()
         if snapshot is None:
             return
         self._syncing = True
         try:
             self._linked = snapshot.linked
-            self._curves[CPU] = curves.seeded_from(snapshot.cpu)
-            self._curves[GPU] = curves.seeded_from(
-                snapshot.cpu if snapshot.linked else snapshot.gpu)
+            self._daemon_has_curve = bool(snapshot.cpu)
+            if snapshot.cpu:
+                self._curves[CPU] = curves.seeded_from(snapshot.cpu)
+                self._curves[GPU] = curves.seeded_from(
+                    snapshot.cpu if snapshot.linked else snapshot.gpu)
+            # else: firmware/manual drive nothing, so keep the shape on screen —
+            # hitting "Firmware auto" must not erase what the user just drew.
             self._link_buttons[snapshot.linked].set_active(True)
             self._fan_switcher.set_visible(not snapshot.linked)
         finally:
@@ -233,7 +248,7 @@ class CurvePage(Adw.NavigationPage):
     def on_telemetry(self, t: Telemetry) -> None:
         self._temps[CPU] = t.cpu_temp
         self._temps[GPU] = t.gpu_temp
-        self._view.set_now_temp(self._temps[self._editing])
+        self._push_now()
         self._update_annotation()
 
     def set_controls_sensitive(self, usable: bool) -> None:
@@ -244,10 +259,17 @@ class CurvePage(Adw.NavigationPage):
     # --- view helpers --------------------------------------------------------
     def _refresh_view(self) -> None:
         self._view.set_points(self._curves[self._editing])
-        other = GPU if self._editing == CPU else CPU
-        self._view.set_ghost(None if self._linked else self._curves[other])
-        self._view.set_now_temp(self._temps[self._editing])
+        self._view.set_ghost(None if self._linked else self._curves[self._other()])
+        self._push_now()
         self._update_annotation()
+
+    def _other(self) -> str:
+        return GPU if self._editing == CPU else CPU
+
+    def _push_now(self) -> None:
+        """The daemon floors a fan on the hotter of its own and the CPU's
+        temperature, so the marker needs both to predict honestly."""
+        self._view.set_now(self._temps[self._editing], self._temps[CPU])
 
     def _update_annotation(self) -> None:
         temp = self._temps[self._editing]
@@ -257,7 +279,7 @@ class CurvePage(Adw.NavigationPage):
         if temp is None:
             self._annotation.set_text(f"Waiting for the {label} temperature…")
             return
-        self._annotation.set_text(
-            curves.annotation(label, temp, self._curves[self._editing]))
+        self._annotation.set_text(curves.annotation(
+            label, temp, self._curves[self._editing], self._temps[CPU]))
         # tinted by the same one temperature scale as the Overview's pill
         self._annotation.add_css_class(temperature.band(temp).value)

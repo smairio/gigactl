@@ -29,6 +29,14 @@ def test_predicted_applies_the_safety_floor():
     assert curves.predicted(lazy, 84) == 0  # below the floor temp, 0 stands
 
 
+def test_predicted_floors_on_the_hotter_of_fan_and_cpu():
+    lazy = [(40, 0), (55, 0), (70, 0), (85, 0), (95, 0)]
+    # the GPU is cool but the CPU is hot: the daemon floors the fan anyway
+    assert curves.predicted(lazy, 50, cpu_temp=95) == curves.FLOOR_PCT
+    # both cool: no floor
+    assert curves.predicted(lazy, 50, cpu_temp=60) == 0
+
+
 def test_annotation_names_the_temperature_and_the_result():
     text = curves.annotation("CPU", 91, BALANCED)
     assert "91" in text and "%" in text
@@ -57,7 +65,7 @@ def test_move_point_keeps_duty_non_decreasing():
 
 def test_move_point_clamps_to_the_axis_range():
     low = curves.move_point(BALANCED, 0, temp=-50, duty=-20)
-    assert low[0][0] >= curves.TEMP_MIN and low[0][1] == 0
+    assert low[0][0] == curves.TEMP_MIN and low[0][1] == 0
     high = curves.move_point(BALANCED, 4, temp=500, duty=500)
     assert high[4][0] <= curves.TEMP_MAX and high[4][1] == 100
 
@@ -86,6 +94,12 @@ def test_pixel_origin_is_bottom_left():
     assert (x0, y0) == (0.0, 200.0)          # coldest, slowest
     x1, y1 = curves.to_pixel(curves.TEMP_MAX, 100, 300, 200)
     assert (x1, y1) == (300.0, 0.0)          # hottest, fastest
+
+
+def test_from_pixel_survives_a_zero_sized_area():
+    # a gesture can fire before the first allocation; dividing by zero there
+    # would escape into the GLib dispatcher
+    assert curves.from_pixel(10, 10, 0, 0) == (float(curves.TEMP_MIN), 0.0)
 
 
 def test_from_pixel_clamps_outside_the_area():
@@ -126,3 +140,28 @@ def test_seeded_from_falls_back_when_the_daemon_drives_nothing():
 def test_seeded_from_normalises_a_short_curve():
     got = curves.seeded_from([(40, 20), (95, 90)])
     assert len(got) == curves.POINTS
+    assert curves.is_valid(got)
+
+
+def test_seeded_from_leaves_a_valid_curve_untouched():
+    # even one that starts colder than the drawn range: the daemon accepts such
+    # a curve, so rewriting it here would show (and later send) a shape the user
+    # never chose
+    cold = [(20, 15), (45, 30), (65, 50), (85, 75), (95, 100)]
+    assert curves.is_valid(cold)
+    assert curves.seeded_from(cold) == cold
+
+
+def test_is_valid_rejects_malformed_curves():
+    assert not curves.is_valid([(40, 20), (95, 90)])                 # too few
+    assert not curves.is_valid([(40, 20), (40, 30), (70, 40),
+                                (85, 50), (95, 60)])                 # flat temps
+    assert not curves.is_valid([(40, 50), (55, 40), (70, 60),
+                                (85, 80), (95, 100)])                # falling duty
+
+
+def test_normalise_uses_the_daemon_lower_bound_not_the_drawn_one():
+    # a malformed curve is coerced by the daemon's rules, which allow the first
+    # point below the drawn range
+    got = curves.seeded_from([(5, 10), (5, 20), (70, 40), (85, 50), (95, 60)])
+    assert got[0][0] == curves.DAEMON_TEMP_MIN or got[0][0] < curves.TEMP_MIN
