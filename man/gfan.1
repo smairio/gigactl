@@ -1,0 +1,137 @@
+.TH GFAN 1 "2026-07-25" "gigactl 1.0.1" "User Commands"
+.SH NAME
+gfan \- control the fans on Gigabyte G5/G6 laptops
+.SH SYNOPSIS
+.B gfan
+.RI [ status ]
+.br
+.B gfan watch
+.br
+.B gfan auto
+.br
+.B gfan max
+.br
+.B gfan
+.I percent
+.RB [ \-\-force ]
+.br
+.B gfan
+.I cpu-percent gpu-percent
+.RB [ \-\-force ]
+.SH DESCRIPTION
+.B gfan
+reads and sets the two laptop fans through the Embedded Controller: fan 1 cools
+the CPU, fan 2 the GPU. With no argument it prints temperatures, duty cycle and
+RPM.
+.PP
+It works in one of two modes, chosen automatically each time it runs.
+.TP
+.B daemon
+The
+.BR gigactld (8)
+service owns its D\-Bus name, which makes it the single writer of the Embedded
+Controller.
+.B gfan
+becomes an unprivileged client of it: no
+.BR sudo ,
+no
+.BR ec_probe ,
+and no chance of the two interleaving controller commands. polkit lets the user
+of the active local session do this without a password.
+.TP
+.B direct
+No daemon is running, so
+.B gfan
+drives the controller itself and re\-runs itself under
+.BR sudo (8)
+to do so. Concurrent invocations take
+.I /run/lock/gigactl\-ec.lock
+\(em the same lock the daemon takes \(em so their command sequences cannot
+interleave. This mode needs the
+.B ec_probe
+utility from nbfc\-linux.
+.PP
+If neither can be established \(em no
+.BR busctl (1)
+on the system, or the bus does not answer \(em
+.B gfan
+refuses to do anything rather than risk writing the controller behind a running
+daemon's back.
+.SH COMMANDS
+.TP
+.B status
+Print CPU and GPU temperature, each fan's duty cycle and RPM, and the current
+mode. This is the default when no argument is given.
+.TP
+.B watch
+Print the same status every two seconds until interrupted.
+.TP
+.B auto
+Hand both fans back to the laptop firmware's own curve. A reboot does this too,
+so no experiment can leave the fans stuck.
+.TP
+.B max
+Run both fans at 100%.
+.TP
+.I percent
+Run both fans at the given duty cycle, 0 to 100.
+.TP
+.I cpu-percent gpu-percent
+Run fan 1 at the first duty cycle and fan 2 at the second.
+.SH OPTIONS
+.TP
+.B \-\-force
+Allow a duty cycle below 30% while the CPU is at or above 85 \(deC. Without it
+such a request is refused, because slowing the fans down on an already hot
+machine is the one combination that can cause damage rather than noise.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.SH EXIT STATUS
+.B gfan
+exits 0 on success and 1 on failure: an unsupported machine, a refused duty
+cycle, a controller that did not accept the write, a lock held by another
+writer, or a daemon whose presence could not be determined.
+.SH ENVIRONMENT
+.TP
+.B GFAN_UNSAFE
+Set to
+.B 1
+to skip the vendor and model check. The Embedded Controller protocol was
+reverse engineered on a Gigabyte G6 KF; on hardware from another ODM the same
+registers can mean anything at all, so overriding this risks the machine.
+.SH FILES
+.TP
+.I /run/gfan.mode
+The manual duty cycle last set in direct mode, reported by
+.BR "gfan status" .
+Absent when the firmware is in control. Cleared on reboot.
+.TP
+.I /run/lock/gigactl\-ec.lock
+Serialises Embedded Controller access between
+.BR gfan ,
+.BR gkbd (1)
+and
+.BR gigactld (8).
+.SH NOTES
+Verified on the Gigabyte G6 KF. Other G5, G6 and G7 models are expected to
+work \(em they are the same Clevo\-ODM platform \(em and print a notice saying
+they are untested. Anything else is refused.
+.PP
+In direct mode every duty cycle is read back after writing. If the controller
+does not converge on the requested value,
+.B gfan
+hands the fans to the firmware and reports what happened, rather than leaving
+them somewhere unintended. In daemon mode the daemon performs the same check.
+.SH SEE ALSO
+.BR gkbd (1),
+.BR gigactl-gui (1),
+.BR gigactld (8)
+.PP
+The reverse\-engineered controller protocol is documented in
+.I /usr/share/doc/gigactl
+and at
+.UR https://github.com/smairio/gigactl
+.UE .
+.SH AUTHOR
+khalil Smairi

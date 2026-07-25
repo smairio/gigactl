@@ -1,0 +1,150 @@
+.TH GIGACTLD 8 "2026-07-25" "gigactl 1.0.1" "System Administration"
+.SH NAME
+gigactld \- GigaControl daemon for Gigabyte G5/G6 fan and keyboard control
+.SH SYNOPSIS
+.B gigactld
+.RB [ \-\-interval
+.IR seconds ]
+.br
+.B gigactld \-\-restore-firmware
+.SH DESCRIPTION
+.B gigactld
+is the root service that owns Embedded Controller access on Gigabyte G5/G6
+laptops and exposes it on the D\-Bus system bus. It is the single writer of the
+controller: the desktop app and the
+.BR gfan (1)
+and
+.BR gkbd (1)
+command line tools are unprivileged clients of it, which is what keeps two
+processes from interleaving controller command sequences.
+.PP
+On each poll it publishes a
+.B Telemetry
+signal \(em CPU and GPU temperature, both fans' RPM and duty cycle \(em and runs
+the active fan profile, applying whatever duty cycle the curve calls for at the
+current temperature. It also remembers the fan profile, the custom curves and the
+keyboard colour and brightness, re\-applying them at boot and after resume from
+suspend.
+.PP
+Every write is authorised through polkit before it happens, using the caller's
+bus name as the subject. The shipped policy allows the user of the active local
+session to control the fans and backlight without a password, and requires
+administrator authentication otherwise \(em which means a remote session such as
+SSH has no polkit agent to satisfy, and should run its client as root instead.
+.PP
+The service is normally managed by systemd and not run by hand:
+.PP
+.RS
+.EX
+systemctl status gigactl.service
+.EE
+.RE
+.SH OPTIONS
+.TP
+.B \-\-interval \fIseconds\fR
+How often to read the controller, publish telemetry and apply the fan curve.
+Defaults to 2 seconds.
+.TP
+.B \-\-restore-firmware
+Hand both fans back to the laptop firmware's own curve and exit immediately. The
+unit runs this after the main process stops, including after a crash, so the fans
+can never be left frozen at a stale manual duty cycle.
+.SH EMBEDDED CONTROLLER ACCESS
+Two backends, chosen at startup. Preferred is the
+.B ec_sys
+debugfs interface, where the kernel's own driver performs and serialises each
+transaction. The fallback is raw port I/O through
+.IR /dev/port ,
+which races the kernel driver and is used only when the module is unavailable.
+.PP
+The package therefore loads
+.B ec_sys
+with write support at boot, and the unit runs
+.B modprobe
+before starting, so the preferred backend is present even on the first start
+after installation. Which one is in use is logged at startup.
+.SH D-BUS INTERFACE
+.B gigactld
+owns
+.B io.github.smairio.gigactl
+on the system bus, at
+.I /io/github/smairio/gigactl
+with interface
+.BR io.github.smairio.gigactl.Control .
+Methods:
+.BR SetFanDuty ,
+.BR RestoreFirmware ,
+.BR SetProfile ,
+.BR SetCurve ,
+.BR SetKeyboardColor ,
+.B SetKeyboardBrightness
+and
+.BR SetKeyboardEnabled .
+Properties:
+.BR DaemonVersion ,
+.BR ActiveProfile ,
+.BR Telemetry ,
+.B KeyboardState
+and
+.BR Curves .
+Reading is unrestricted; every method is gated by polkit.
+.PP
+.RS
+.EX
+busctl introspect io.github.smairio.gigactl /io/github/smairio/gigactl
+.EE
+.RE
+.SH FILES
+.TP
+.I /var/lib/gigactl/state.json
+The saved fan profile, custom curves and keyboard state, restored at startup.
+Removed when the package is purged.
+.TP
+.I /usr/lib/systemd/system/gigactl.service
+The unit. Enabled and started when the package is installed.
+.TP
+.I /usr/share/dbus-1/system.d/io.github.smairio.gigactl.conf
+Bus policy: only root may own the name; any user may call the interface, and
+polkit decides inside the daemon.
+.TP
+.I /usr/share/polkit-1/actions/io.github.smairio.gigactl.policy
+The
+.B control-fans
+and
+.B control-keyboard
+actions and their defaults.
+.TP
+.I /run/lock/gigactl-ec.lock
+Held for the duration of each controller transaction, and taken by
+.BR gfan (1)
+and
+.BR gkbd (1)
+when they write the controller directly.
+.SH EXIT STATUS
+Exits 1 if the Embedded Controller cannot be opened, and 0 on a clean shutdown or
+after
+.BR \-\-restore-firmware .
+.SH NOTES
+If the daemon is stopped, the fans return to firmware control rather than
+staying where it left them. Recovering by hand, should it ever be needed:
+.PP
+.RS
+.EX
+sudo gigactld \-\-restore-firmware
+.EE
+.RE
+.SH SEE ALSO
+.BR gigactl-gui (1),
+.BR gfan (1),
+.BR gkbd (1),
+.BR systemctl (1),
+.BR busctl (1),
+.BR polkit (8)
+.PP
+The reverse\-engineered controller protocol is documented in
+.I /usr/share/doc/gigactl
+and at
+.UR https://github.com/smairio/gigactl
+.UE .
+.SH AUTHOR
+khalil Smairi

@@ -1,0 +1,157 @@
+.TH GKBD 1 "2026-07-25" "gigactl 1.0.1" "User Commands"
+.SH NAME
+gkbd \- control the keyboard backlight on Gigabyte G5/G6 laptops
+.SH SYNOPSIS
+.B gkbd
+.I color
+.br
+.B gkbd
+.I RRGGBB
+.br
+.B gkbd brightness
+.I percent
+.br
+.B gkbd off
+.br
+.B gkbd on
+.br
+.B gkbd status
+.br
+.B gkbd apply
+.SH DESCRIPTION
+.B gkbd
+sets the colour and brightness of the single\-zone RGB keyboard backlight
+through the Embedded Controller.
+.PP
+It works in one of two modes, chosen automatically each time it runs.
+.TP
+.B daemon
+The
+.BR gigactld (8)
+service owns its D\-Bus name, so it is both the single writer of the Embedded
+Controller and the owner of the saved backlight state, which it re\-applies at
+boot and after suspend.
+.B gkbd
+becomes an unprivileged client of it: no
+.BR sudo ,
+no
+.BR ec_probe ,
+and \(em deliberately \(em no writes to
+.BR gkbd 's
+own store, because two stores for one backlight is how a stale colour wins a
+race.
+.TP
+.B direct
+No daemon is running, so
+.B gkbd
+drives the controller itself, keeps its own saved state in
+.IR /var/lib/gkbd ,
+and re\-runs itself under
+.BR sudo (8).
+Concurrent invocations serialise on
+.IR /run/lock/gigactl\-ec.lock .
+This mode needs the
+.B ec_probe
+utility from nbfc\-linux.
+.PP
+If neither can be established \(em no
+.BR busctl (1)
+on the system, or the bus does not answer \(em
+.B gkbd
+refuses to do anything rather than risk writing the controller behind a running
+daemon's back.
+.SH COMMANDS
+.TP
+.I color
+One of
+.BR red ,
+.BR green ,
+.BR blue ,
+.BR white ,
+.BR orange ,
+.BR yellow ,
+.BR cyan ,
+.BR purple
+(or
+.BR violet )
+and
+.BR pink .
+.TP
+.I RRGGBB
+An explicit colour in hexadecimal, with or without a leading
+.BR # ,
+for example
+.B ff6600
+or
+.BR '#00ff88' .
+.TP
+.B brightness \fIpercent\fR
+Set backlight brightness, 0 to 100.
+.TP
+.B off
+Switch the backlight off.
+.TP
+.B on
+Switch the backlight on, restoring the last colour and brightness.
+.TP
+.B status
+Print the current colour and brightness. In daemon mode this is what the daemon
+holds; in direct mode it is what
+.B gkbd
+last saved.
+.TP
+.B apply
+Re\-apply the saved state. This exists for the standalone restore service that
+predates the daemon; when the daemon is running it owns restore, so this reports
+that there is nothing to do rather than writing an older value over a newer one.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.SH EXIT STATUS
+.B gkbd
+exits 0 on success and 1 on failure: an unsupported machine, an unrecognised
+colour, a lock held by another writer, or a daemon whose presence could not be
+determined.
+.SH ENVIRONMENT
+.TP
+.B GKBD_UNSAFE
+Set to
+.B 1
+to skip the vendor and model check. The Embedded Controller protocol was
+reverse engineered on a Gigabyte G6 KF; on hardware from another ODM the same
+registers can mean anything at all, so overriding this risks the machine.
+.SH FILES
+.TP
+.I /var/lib/gkbd/state
+Colour and brightness saved by direct mode. Not used, and not written, while the
+daemon is running \(em it keeps its own state in
+.IR /var/lib/gigactl/state.json .
+.TP
+.I /run/lock/gigactl\-ec.lock
+Serialises Embedded Controller access between
+.BR gkbd ,
+.BR gfan (1)
+and
+.BR gigactld (8).
+.SH NOTES
+Verified on the Gigabyte G6 KF. Other G5, G6 and G7 models are expected to
+work \(em they are the same Clevo\-ODM platform \(em and print a notice saying
+they are untested. Anything else is refused.
+.PP
+The backlight is a single zone: one colour for the whole keyboard. The
+controller wants its colour bytes in blue, red, green order and ignores every
+lighting command until it has been sent a master enable, both of which are
+handled here and documented with the protocol.
+.SH SEE ALSO
+.BR gfan (1),
+.BR gigactl-gui (1),
+.BR gigactld (8)
+.PP
+The reverse\-engineered controller protocol is documented in
+.I /usr/share/doc/gigactl
+and at
+.UR https://github.com/smairio/gigactl
+.UE .
+.SH AUTHOR
+khalil Smairi

@@ -1,0 +1,70 @@
+.TH GIGACTL-GUI 1 "2026-07-25" "gigactl 1.0.1" "User Commands"
+.SH NAME
+gigactl-gui \- GigaControl, the desktop app for Gigabyte G5/G6 fans and keyboard
+.SH SYNOPSIS
+.B gigactl-gui
+.br
+.B gigactl-gui \-\-tray
+.br
+.B gigactl-gui \-\-help
+.SH DESCRIPTION
+.B GigaControl
+is the desktop front end for
+.BR gigactld (8).
+It shows live CPU and GPU temperatures, both fans' speed and duty cycle, and
+lets you pick a fan profile, draw a custom fan curve, and set the keyboard
+backlight's colour and brightness.
+.PP
+It is an unprivileged D\-Bus client: every change is a request to the daemon,
+which authorises it through polkit and is the only process that touches the
+Embedded Controller. The user of the active local session is not asked for a
+password, as with screen brightness. Run it from your application menu as
+.BR GigaControl ,
+or from a terminal.
+.PP
+With a tray host present the window can be closed without quitting: the app
+keeps running behind its tray icon, whose menu switches fan profile, toggles the
+backlight and reopens the window. Closing the window with no tray host quits,
+because nothing would be left to reopen it from.
+.SH OPTIONS
+.TP
+.B \-\-tray
+Start with no window, showing only the tray icon. This is what the autostart
+entry uses at login.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.SH AUTOSTART
+The package installs
+.I /etc/xdg/autostart/gigactl-tray.desktop
+so the tray starts at every login. To opt out, place a file of the same name
+containing
+.B Hidden=true
+in
+.IR ~/.config/autostart/ ,
+or use your desktop's startup\-applications settings.
+.SH THE TRAY ICON
+The tray uses the StatusNotifierItem protocol. GNOME does not implement it
+without an extension: on Ubuntu the preinstalled AppIndicator extension provides
+it, and if nothing does, the app says so once and runs from its window alone.
+KDE, XFCE, Cinnamon and MATE support it natively.
+.SH FILES
+.TP
+.I /usr/share/applications/io.github.smairio.gigactl.desktop
+The application menu entry.
+.TP
+.I /etc/xdg/autostart/gigactl-tray.desktop
+The login autostart entry.
+.SH NOTES
+A machine outside the verified Gigabyte G5/G6/G7 range is reported as
+unsupported in the window rather than refused, since the app itself writes
+nothing; the daemon and the command line tools carry the guards.
+.SH SEE ALSO
+.BR gigactld (8),
+.BR gfan (1),
+.BR gkbd (1)
+.PP
+.UR https://github.com/smairio/gigactl
+.UE
+.SH AUTHOR
+khalil Smairi

@@ -1,3 +1,12 @@
+gigactl (1.0.1) noble; urgency=low
+
+  * Add manual pages for gfan(1), gkbd(1), gigactl-gui(1) and gigactld(8),
+    clearing the only warnings lintian still reported. gigactld(8) documents the
+    D-Bus interface, the polkit model, both Embedded Controller backends and the
+    firmware-restore failsafe.
+
+ -- khalil Smairi <smairio98@gmail.com>  Sat, 25 Jul 2026 09:45:00 +0100
+
 gigactl (1.0.0) noble; urgency=medium
 
   * GigaControl Desktop v1: first packaged release.

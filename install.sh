@@ -12,6 +12,10 @@ if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now gkbd-restore.service 2>/dev/null || true
   rm -f /usr/local/bin/gfan /usr/local/bin/gkbd \
         /usr/lib/gigactl/gigactl-cli-lib.sh \
+        /usr/local/share/man/man1/gfan.1 \
+        /usr/local/share/man/man1/gkbd.1 \
+        /usr/local/share/man/man1/gigactl-gui.1 \
+        /usr/local/share/man/man8/gigactld.8 \
         /etc/systemd/system/gkbd-restore.service \
         /lib/systemd/system-sleep/gkbd
   rmdir /usr/lib/gigactl 2>/dev/null || true  # the .deb may own it too
@@ -51,6 +55,13 @@ install -m 755 "$DIR/gkbd" /usr/local/bin/gkbd
 # one the .deb uses).
 install -d /usr/lib/gigactl
 install -m 644 "$DIR/gigactl-cli-lib.sh" /usr/lib/gigactl/gigactl-cli-lib.sh
+# Manual pages, so `man gfan` works from a source install too. The .deb has
+# dh_installman for this; here they go under /usr/local, uncompressed, which man
+# reads happily.
+install -d /usr/local/share/man/man1 /usr/local/share/man/man8
+install -m 644 "$DIR"/man/*.1 /usr/local/share/man/man1/
+install -m 644 "$DIR"/man/*.8 /usr/local/share/man/man8/
+mandb -q 2>/dev/null || true
 install -m 644 "$DIR/systemd/gkbd-restore.service" /etc/systemd/system/gkbd-restore.service
 install -m 755 "$DIR/systemd/system-sleep-gkbd" /lib/systemd/system-sleep/gkbd
 systemctl daemon-reload

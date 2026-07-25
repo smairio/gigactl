@@ -134,6 +134,41 @@ def pyproject_scripts(rel: str) -> dict[str, str]:
     return dict(re.findall(r'^(\S+) = "(.+?)"$', section, re.MULTILINE))
 
 
+# --- manual pages -----------------------------------------------------------
+
+def manpages() -> list[str]:
+    """Paths listed in debian/gigactl.manpages, in order."""
+    return [line.split("#", 1)[0].strip()
+            for line in text("debian/gigactl.manpages").splitlines()
+            if line.split("#", 1)[0].strip()]
+
+
+def shell_subcommands(tool: str) -> set[str]:
+    """The subcommands a shell tool advertises in its own usage() text.
+
+    Only the literal words — the ``<pct>`` and ``<color>`` placeholders are
+    arguments, not subcommands, and are described in the man page's own prose.
+    """
+    usage = text(tool).split("usage() {", 1)[1].split("EOF", 2)[1]
+    words = re.findall(rf"^  {tool} (\S+)", usage, re.MULTILINE)
+    return {w for w in words if w.isalpha()}
+
+
+def rendered(page: str) -> str:
+    """A man page's text with roff's escapes flattened, for content matching.
+
+    A literal hyphen-minus in roff is ``\\-`` — a bare ``-`` is a typographic
+    hyphen — so an option reads ``\\-\\-tray`` in the source and ``--tray`` on
+    screen. Tests care about the latter.
+    """
+    return text(page).replace("\\-", "-").replace("\\fI", "").replace("\\fR", "")
+
+
+def long_options(rel: str) -> set[str]:
+    """Long options a Python entry point actually looks for in argv."""
+    return set(re.findall(r'"(--[a-z][a-z-]*)"', text(rel)))
+
+
 # --- the release workflow ---------------------------------------------------
 
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
