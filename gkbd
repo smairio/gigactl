@@ -59,12 +59,34 @@ daemon_set_brightness() { call SetKeyboardBrightness u "$1"; }
 
 daemon_set_enabled() { call SetKeyboardEnabled b "$1"; }
 
+daemon_set_effect() { call SetKeyboardEffect su "$1" "$2"; }   # name, seconds per loop (0 = default)
+daemon_set_idle()   { call SetKeyboardIdleTimeout u "$1"; }    # seconds, 0 = never
+daemon_set_notify() { call SetKeyboardNotifyFlash b "$1"; }
+daemon_flash()      { call FlashKeyboard; }
+
 daemon_status() {
   local out enabled r g b pct
   out=$(prop KeyboardState) || die "could not read the keyboard state from the daemon"
   read -r _type enabled r g b pct <<<"$out"
   [ -n "${pct:-}" ] || die "unexpected keyboard state from the daemon: $out"
   echo "daemon: R=$r G=$g B=$b brightness=${pct}% ($([ "$enabled" = true ] && echo on || echo off))"
+  # A daemon older than the lighting features has no such property; say
+  # nothing rather than something wrong.
+  local fx effect period idle notify
+  if fx=$(prop KeyboardEffects); then
+    read -r _type effect period idle notify <<<"$fx"
+    effect=${effect//\"/}
+    case "$effect" in
+      cycle|breathe) echo "effect: $effect (one loop every ${period}s)" ;;
+      *) echo "effect: $effect" ;;
+    esac
+    if [ "${idle:-0}" -gt 0 ]; then
+      echo "auto-off: after ${idle}s without typing"
+    else
+      echo "auto-off: never"
+    fi
+    echo "notification flash: $([ "$notify" = true ] && echo on || echo off)"
+  fi
   warn_if_ec_stuck
 }
 
@@ -159,7 +181,27 @@ direct_apply() {
   set_color "$r" "$g" "$b"
 }
 
+# Effects, auto-off and flashing need something running all the time to drive
+# them; that is the daemon. Without it there is nothing to do it, so say so.
+_needs_daemon() {
+  die "$1 needs the gigactl daemon (it runs the timers) — start it with: sudo systemctl start gigactl"
+}
+direct_set_effect() { _needs_daemon "effects"; }
+direct_set_idle()   { _needs_daemon "auto-off"; }
+direct_set_notify() { _needs_daemon "notification flashing"; }
+direct_flash()      { _needs_daemon "flashing"; }
+
 # --- shared -------------------------------------------------------------------
+
+seconds_of() { # 45 | 45s | 2m | 1h -> seconds; off|never|0 -> 0
+  case "${1,,}" in
+    off|never|0) echo 0 ;;
+    *[0-9]h) [[ "${1%[hH]}" =~ ^[0-9]+$ ]] && echo $(( ${1%[hH]} * 3600 )) ;;
+    *[0-9]m) [[ "${1%[mM]}" =~ ^[0-9]+$ ]] && echo $(( ${1%[mM]} * 60 )) ;;
+    *[0-9]s) [[ "${1%[sS]}" =~ ^[0-9]+$ ]] && echo "${1%[sS]}" ;;
+    *) [[ "$1" =~ ^[0-9]+$ ]] && echo "$1" ;;
+  esac
+}
 
 named_color() {
   case "${1,,}" in
@@ -192,12 +234,21 @@ Usage:
   gkbd brightness <0-100> backlight brightness percent
   gkbd off                backlight off
   gkbd on                 backlight on (restores saved color)
+  gkbd effect <name> [speed]
+                          static | cycle (slow rainbow) | breathe | temp (CPU heat colour)
+                          speed is one full loop, e.g. gkbd effect cycle 5m
+  gkbd idle <time|off>    turn the light off after this long without typing,
+                          e.g. gkbd idle 30s, gkbd idle 2m, gkbd idle off
+  gkbd notify on|off      flash the keys when a desktop notification arrives
+                          (needs the GigaControl app running in your session)
+  gkbd flash              flash the keys once now
   gkbd status             show current state
   gkbd apply              re-apply saved state (legacy; the daemon does this itself)
 
 With the gigactl daemon running, gkbd drives it over D-Bus, needs no root, and the
 daemon is what remembers your colour across reboot and suspend. Without it, gkbd
-writes the EC directly, keeps its own saved state and re-runs itself under sudo.
+writes the EC directly, keeps its own saved state and re-runs itself under sudo
+(colour, brightness and on/off only: effects, idle and flashing need the daemon).
 If it cannot tell whether the daemon is running, it refuses rather than guesses.
 EOF
 }
@@ -219,6 +270,38 @@ main() {
     apply) model_check; op apply ;;
     off) model_check; op set_enabled false; echo "Backlight off." ;;
     on) model_check; op set_enabled true; echo "Backlight on." ;;
+    effect)
+      model_check
+      local name="${2:-}" speed=0
+      case "${name,,}" in
+        static|cycle|breathe) ;;
+        rainbow) name=cycle ;;
+        breathing) name=breathe ;;
+        temp|temperature|heat) name=temperature ;;
+        *) die "effect needs one of: static cycle breathe temp" ;;
+      esac
+      if [ -n "${3:-}" ]; then
+        speed=$(seconds_of "$3") || true
+        [ -n "$speed" ] && [ "$speed" -gt 0 ] || die "speed needs a time, e.g. 30s, 5m or 1h"
+      fi
+      op set_effect "${name,,}" "$speed"
+      echo "Effect: ${name,,}$([ "$speed" -gt 0 ] && echo ", one loop every ${speed}s")." ;;
+    idle)
+      model_check
+      local secs
+      secs=$(seconds_of "${2:-}") || true
+      [ -n "$secs" ] || die "idle needs a time (e.g. 30s, 2m) or off"
+      op set_idle "$secs"
+      if [ "$secs" -eq 0 ]; then echo "Auto-off disabled."
+      else echo "The light turns off after ${secs}s without typing."; fi ;;
+    notify)
+      model_check
+      case "${2:-}" in
+        on) op set_notify true; echo "Notification flash on." ;;
+        off) op set_notify false; echo "Notification flash off." ;;
+        *) die "notify needs on or off" ;;
+      esac ;;
+    flash) model_check; op flash ;;
     brightness)
       model_check
       local p="${2:-}"

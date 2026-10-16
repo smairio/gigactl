@@ -14,18 +14,43 @@ from __future__ import annotations
 
 RGB = tuple[int, int, int]
 
-# Order is the swatch order in the UI.
-SWATCHES: tuple[tuple[str, RGB], ...] = (
-    ("Blue", (0, 0, 255)),
+# Order is the swatch order in the UI: an 8-wide grid read like a book. The
+# first two rows walk the colour wheel once, in order — red, orange, yellow,
+# green, cyan, blue, purple, pink. The third row is the soft tints and whites,
+# also in wheel order: warm pinks and peaches into the whites, then the cool
+# ice and lavender. (Test-enforced: see test_lighting.py.) The values are tuned
+# for the keyboard's LEDs, not a screen — "Warm white", for one, is mostly red
+# because the LEDs' blue is the strongest of the three.
+VIVID: tuple[tuple[str, RGB], ...] = (
     ("Red", (255, 0, 0)),
-    ("Green", (0, 255, 0)),
-    ("Yellow", (255, 180, 0)),
     ("Orange", (255, 80, 0)),
+    ("Amber", (255, 130, 0)),
+    ("Yellow", (255, 180, 0)),
+    ("Lime", (140, 255, 0)),
+    ("Green", (0, 255, 0)),
+    ("Mint", (0, 255, 120)),
+    ("Teal", (0, 210, 170)),
     ("Cyan", (0, 255, 255)),
+    ("Aqua", (0, 200, 255)),
+    ("Sky", (0, 140, 255)),
+    ("Blue", (0, 0, 255)),
+    ("Indigo", (70, 0, 255)),
     ("Purple", (160, 0, 255)),
+    ("Magenta", (255, 0, 255)),
     ("Pink", (255, 0, 120)),
-    ("White", (255, 255, 255)),
 )
+SOFT: tuple[tuple[str, RGB], ...] = (
+    ("Rose", (255, 30, 60)),
+    ("Coral", (255, 70, 50)),
+    ("Peach", (255, 120, 70)),
+    ("Warm white", (255, 170, 90)),
+    ("Soft white", (255, 215, 170)),
+    ("White", (255, 255, 255)),
+    ("Ice", (120, 200, 255)),
+    ("Lavender", (170, 110, 255)),
+)
+SWATCHES: tuple[tuple[str, RGB], ...] = VIVID + SOFT
+GRID_COLUMNS = 8
 
 
 def name_for(rgb: RGB) -> str | None:

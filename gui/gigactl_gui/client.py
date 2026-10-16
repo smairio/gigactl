@@ -64,6 +64,24 @@ class KeyboardSnapshot:
 
 
 @dataclass(frozen=True)
+class EffectsSnapshot:
+    """The daemon's ``KeyboardEffects`` property: the running effect, its speed
+    in seconds per loop (already the default when none was chosen), the
+    auto-off timeout (0 = never) and whether notifications flash the keys."""
+    effect: str
+    period_s: int
+    idle_timeout_s: int
+    notify_flash: bool
+
+    @classmethod
+    def from_tuple(cls, values) -> EffectsSnapshot:
+        if len(values) != 4:
+            raise ValueError(f"expected 4 effects fields, got {len(values)}")
+        effect, period, idle, flash = values
+        return cls(str(effect), int(period), int(idle), bool(flash))
+
+
+@dataclass(frozen=True)
 class CurveSnapshot:
     """The daemon's ``Curves`` property — the shape the editor loads. Empty point
     lists mean the engine is driving nothing (firmware or a manual override)."""
@@ -194,6 +212,28 @@ class DaemonClient:
             print(f"gigactl-gui: bad KeyboardState property: {exc}", flush=True)
             return None
 
+    def keyboard_effects(self) -> EffectsSnapshot | None:
+        """None both before the daemon answers and for a daemon older than the
+        lighting features — the window then hides those controls rather than
+        offering ones that would be refused."""
+        if not self._proxy:
+            return None
+        v = self._proxy.get_cached_property("KeyboardEffects")
+        if v is None:
+            return None
+        try:
+            return EffectsSnapshot.from_tuple(v.unpack())
+        except (ValueError, TypeError) as exc:
+            print(f"gigactl-gui: bad KeyboardEffects property: {exc}", flush=True)
+            return None
+
+    def keyboard_idle(self) -> bool:
+        """True while the keys are dark because nobody has typed."""
+        if not self._proxy:
+            return False
+        v = self._proxy.get_cached_property("KeyboardIdle")
+        return bool(v.get_boolean()) if v is not None else False
+
     # --- control calls -------------------------------------------------------
     def set_profile(self, name: str) -> None:
         self._call("SetProfile", GLib.Variant("(s)", (name,)))
@@ -213,6 +253,33 @@ class DaemonClient:
 
     def set_keyboard_enabled(self, on: bool) -> None:
         self._call("SetKeyboardEnabled", GLib.Variant("(b)", (on,)))
+
+    def set_keyboard_effect(self, effect: str, period_s: int = 0) -> None:
+        self._call("SetKeyboardEffect", GLib.Variant("(su)", (effect, period_s)))
+
+    def set_keyboard_idle_timeout(self, seconds: int) -> None:
+        self._call("SetKeyboardIdleTimeout", GLib.Variant("(u)", (seconds,)))
+
+    def set_keyboard_notify_flash(self, on: bool) -> None:
+        self._call("SetKeyboardNotifyFlash", GLib.Variant("(b)", (on,)))
+
+    def flash_keyboard(self, *, quiet: bool = False) -> None:
+        """Ask for a notification flash. ``quiet`` drops failures instead of
+        reporting them: a flash is a nicety, and a toast for every missed one
+        (daemon restarting, light switched off) would be worse than none."""
+        if quiet:
+            if self.available:
+                self._proxy.call("FlashKeyboard", None, Gio.DBusCallFlags.NONE,
+                                 -1, None, self._on_quiet_done, None)
+            return
+        self._call("FlashKeyboard", None)
+
+    @staticmethod
+    def _on_quiet_done(proxy, result, _data) -> None:
+        try:
+            proxy.call_finish(result)
+        except Exception:
+            pass
 
     def _call(self, method: str, params: GLib.Variant | None) -> None:
         """Fire and forget; failures arrive on ``on_error``. Asynchronous so the

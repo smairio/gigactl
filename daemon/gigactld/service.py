@@ -6,6 +6,7 @@ exposes fan-control methods (all gated by polkit).
 """
 from __future__ import annotations
 
+import dataclasses
 import signal
 import time
 
@@ -15,7 +16,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
-from . import authz, curve, ec as ec_mod, fans, keyboard, mailbox, state  # noqa: E402
+from . import activity, authz, curve, ec as ec_mod, fans, keyboard, lighting, mailbox, state  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
 
 _ERR = "io.github.smairio.gigactl.Error"
@@ -51,6 +52,24 @@ INTROSPECTION_XML = f"""
     <method name="SetKeyboardEnabled">
       <arg name="on" type="b" direction="in"/>
     </method>
+    <!-- effect: static | cycle | breathe | temperature. period_s is seconds
+         per loop for cycle/breathe; 0 picks the default speed. -->
+    <method name="SetKeyboardEffect">
+      <arg name="effect"   type="s" direction="in"/>
+      <arg name="period_s" type="u" direction="in"/>
+    </method>
+    <!-- Fade the keys to dark after this many seconds with no typing; 0 = never. -->
+    <method name="SetKeyboardIdleTimeout">
+      <arg name="seconds" type="u" direction="in"/>
+    </method>
+    <!-- Remembered for the desktop app, which watches the session's
+         notifications and calls FlashKeyboard when this is on. -->
+    <method name="SetKeyboardNotifyFlash">
+      <arg name="on" type="b" direction="in"/>
+    </method>
+    <!-- A few quick white blinks, then back to normal. Does nothing while the
+         backlight is switched off or a flash is already running. -->
+    <method name="FlashKeyboard"/>
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
       <arg name="gpu_temp"  type="u"/>
@@ -75,6 +94,13 @@ INTROSPECTION_XML = f"""
     <property name="Telemetry" type="(uuuuuu)" access="read"/>
     <!-- (enabled, r, g, b, brightness_pct) — what the GUI shows as selected -->
     <property name="KeyboardState" type="(buuuu)" access="read"/>
+    <!-- (effect, period_s, idle_timeout_s, notify_flash). period_s is the speed
+         actually in use (the default when none was chosen), so a client can
+         draw the same animation the keys show. -->
+    <property name="KeyboardEffects" type="(suub)" access="read"/>
+    <!-- True while the keys are dark because nobody has typed for the idle
+         timeout. Announced on change only. -->
+    <property name="KeyboardIdle" type="b" access="read"/>
     <!-- (linked, cpu_points, gpu_points) — the shape the curve editor loads.
          Empty point lists mean the engine is driving nothing (firmware/manual). -->
     <property name="Curves" type="(ba(uu)a(uu))" access="read"/>
@@ -90,6 +116,12 @@ def _keyboard_variant(kbd: keyboard.KeyboardState | None) -> GLib.Variant:
     itself boots with, which is honest rather than a guess."""
     k = kbd or keyboard.KeyboardState()
     return GLib.Variant("(buuuu)", (k.enabled, k.r, k.g, k.b, k.brightness_pct))
+
+
+def _effects_variant(kbd: keyboard.KeyboardState | None) -> GLib.Variant:
+    k = kbd or keyboard.KeyboardState()
+    return GLib.Variant("(suub)", (k.effect, k.effective_period_s(),
+                                   k.idle_timeout_s, k.notify_flash))
 
 
 def _curves_variant(engine: curve.ProfileEngine) -> GLib.Variant:
@@ -112,16 +144,35 @@ class Daemon:
         self._node = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
         self._loop = GLib.MainLoop()
         self.engine = curve.ProfileEngine(hysteresis=curve.HYSTERESIS_C)
+        # The keyboard's moment-to-moment look (effects, idle fade, flashes)
+        # and the EC writer that only sends what changed. ``lighting.settings``
+        # follows ``self.keyboard`` (see the property below).
+        self.lighting = lighting.Lighting()
         # Lazily created on first keyboard set (see _remember_keyboard): while
         # it's None the daemon writes no keyboard section and re-applies nothing,
         # so a fan-only user's backlight is never touched.
-        self.keyboard: keyboard.KeyboardState | None = None
+        self.keyboard = None
+        self.kbd_driver = lighting.Driver(ec)
+        self._light_source = 0
+        self._kbd_fault: str | None = None
+        self._kbd_dimmed = False
+        self.activity = activity.ActivityWatcher(self._on_key_activity)
         self.state_path = state.DEFAULT_PATH
         # Why the engine's last attempt to drive the fans came to nothing, and
         # the status last announced — kept so a condition repeating every two
         # seconds is reported once rather than every tick.
         self._engine_fault: str | None = None
         self._last_ec_status = ""
+
+    @property
+    def keyboard(self) -> keyboard.KeyboardState | None:
+        return self.lighting.settings
+
+    @keyboard.setter
+    def keyboard(self, kbd: keyboard.KeyboardState | None) -> None:
+        # One object, two readers: the lighting engine sees a setting the
+        # moment D-Bus changes it, with nothing to keep in sync.
+        self.lighting.settings = kbd
 
     # --- lifecycle -----------------------------------------------------------
     def run(self) -> None:
@@ -149,6 +200,7 @@ class Daemon:
                 fans.restore_auto(self.ec, f)
         except Exception as exc:
             print(f"gigactld: firmware restore on shutdown failed: {exc}", flush=True)
+        self._leave_keyboard_steady()
         self._loop.quit()
         return GLib.SOURCE_REMOVE
 
@@ -190,14 +242,91 @@ class Daemon:
     def _apply_keyboard(self, why: str) -> None:
         """Re-drive the backlight to the remembered state, if the user has set
         one. Best-effort and self-contained — it runs from a signal callback, so
-        an exception must not escape into the GLib loop."""
+        an exception must not escape into the GLib loop.
+
+        The EC's state is unknown after boot or resume, so the driver forgets
+        what it last wrote and sends everything; and the idle clock restarts,
+        because opening the lid is as good as a key press."""
         if self.keyboard is None:
             return
+        self.kbd_driver.invalidate()
+        self.lighting.note_activity(time.monotonic())
         try:
-            self.keyboard.apply(self.ec)
+            self._render_keyboard()
             print(f"gigactld: keyboard re-applied ({why})", flush=True)
         except Exception as exc:
             print(f"gigactld: keyboard apply failed ({why}): {exc}", flush=True)
+        self._sync_activity()
+
+    # --- keyboard lighting loop ----------------------------------------------
+    def _render_keyboard(self) -> None:
+        """Show what the backlight should show now, then sleep until that next
+        changes. Raises on an EC failure (the caller decides whether a user is
+        waiting on it); the reschedule happens either way, so one failed frame
+        never freezes an effect."""
+        if self._light_source:
+            GLib.source_remove(self._light_source)
+            self._light_source = 0
+        now = time.monotonic()
+        try:
+            self.kbd_driver.show(self.lighting.look(now, time.time()))
+        finally:
+            delay = self.lighting.next_delay(time.monotonic())
+            if delay is not None:
+                self._light_source = GLib.timeout_add(
+                    max(10, int(delay * 1000)), self._on_light_timer)
+            self._sync_dimmed(now)
+
+    def _render_keyboard_quietly(self) -> None:
+        """For timers, key presses and telemetry: a failure is logged once per
+        distinct cause rather than every frame, and never escapes."""
+        try:
+            self._render_keyboard()
+            self._kbd_fault = None
+        except Exception as exc:
+            msg = str(exc)
+            if msg != self._kbd_fault:
+                print(f"gigactld: keyboard lighting write failed: {msg}", flush=True)
+                self._kbd_fault = msg
+
+    def _on_light_timer(self) -> bool:
+        self._light_source = 0
+        self._render_keyboard_quietly()
+        return GLib.SOURCE_REMOVE
+
+    def _on_key_activity(self) -> None:
+        # Cheap on purpose: this runs on every key event. Only a press that
+        # wakes dimmed keys needs a redraw now; otherwise the pending timer
+        # re-reads the (moved) idle deadline when it fires.
+        if self.lighting.note_activity(time.monotonic()):
+            self._render_keyboard_quietly()
+
+    def _sync_dimmed(self, now: float) -> None:
+        dimmed = self.lighting.is_dimmed(now)
+        if dimmed != self._kbd_dimmed:
+            self._kbd_dimmed = dimmed
+            self._notify_properties(KeyboardIdle=GLib.Variant("b", dimmed))
+
+    def _sync_activity(self) -> None:
+        """Watch the keyboards only while an idle timeout needs it."""
+        k = self.keyboard
+        wanted = k is not None and k.enabled and k.idle_timeout_s > 0
+        if wanted and not self.activity.running:
+            self.activity.start()
+        elif not wanted and self.activity.running:
+            self.activity.stop()
+            print("gigactld: stopped watching keyboards", flush=True)
+
+    def _leave_keyboard_steady(self) -> None:
+        """On a clean stop, put the keys back to the user's plain colour, so a
+        stopped daemon never strands them dark (idle) or mid-breath."""
+        if self.keyboard is None:
+            return
+        self.activity.stop()
+        try:
+            self.keyboard.apply(self.ec)
+        except Exception as exc:
+            print(f"gigactld: keyboard restore on shutdown failed: {exc}", flush=True)
 
     def _subscribe_sleep(self, conn: Gio.DBusConnection) -> None:
         """Listen for logind's PrepareForSleep so we can re-apply the backlight
@@ -220,7 +349,12 @@ class Daemon:
         # PrepareForSleep(true) fires before sleep, (false) after resume; the
         # backlight only needs re-driving on the resume edge.
         (going_to_sleep,) = params.unpack()
-        if not going_to_sleep:
+        if going_to_sleep:
+            # No effect frames while the machine suspends; resume redraws.
+            if self._light_source:
+                GLib.source_remove(self._light_source)
+                self._light_source = 0
+        else:
             self._apply_keyboard("resume")
 
     def _on_name_acquired(self, conn, name: str) -> None:
@@ -255,6 +389,10 @@ class Daemon:
                                  t.fan1_duty_pct, t.fan2_duty_pct))
         if prop == "KeyboardState":
             return _keyboard_variant(self.keyboard)
+        if prop == "KeyboardEffects":
+            return _effects_variant(self.keyboard)
+        if prop == "KeyboardIdle":
+            return GLib.Variant("b", self._kbd_dimmed)
         if prop == "Curves":
             return _curves_variant(self.engine)
         return None
@@ -309,7 +447,8 @@ class Daemon:
             Curves=_curves_variant(self.engine))
 
     def _notify_keyboard(self) -> None:
-        self._notify_properties(KeyboardState=_keyboard_variant(self.keyboard))
+        self._notify_properties(KeyboardState=_keyboard_variant(self.keyboard),
+                                KeyboardEffects=_effects_variant(self.keyboard))
 
     def _method_call(self, conn, sender, path, iface, method, params, invocation):
         try:
@@ -327,6 +466,14 @@ class Daemon:
                 self._set_keyboard_brightness(sender, params, invocation)
             elif method == "SetKeyboardEnabled":
                 self._set_keyboard_enabled(sender, params, invocation)
+            elif method == "SetKeyboardEffect":
+                self._set_keyboard_effect(sender, params, invocation)
+            elif method == "SetKeyboardIdleTimeout":
+                self._set_keyboard_idle_timeout(sender, params, invocation)
+            elif method == "SetKeyboardNotifyFlash":
+                self._set_keyboard_notify_flash(sender, params, invocation)
+            elif method == "FlashKeyboard":
+                self._flash_keyboard(sender, invocation)
             else:
                 invocation.return_dbus_error(f"{_ERR}.UnknownMethod", method)
         except ec_mod.EcNotWritable as exc:
@@ -415,6 +562,9 @@ class Daemon:
                 ),
             )
             self._run_engine(t.cpu_temp, t.gpu_temp, quiet=True)
+            self.lighting.note_temperature(t.cpu_temp)
+            if self.keyboard is not None and self.keyboard.effect == keyboard.TEMPERATURE:
+                self._render_keyboard_quietly()
         except Exception as exc:
             print(f"gigactld: tick failed: {exc}", flush=True)
         self._sync_ec_status()
@@ -502,6 +652,32 @@ class Daemon:
             self.keyboard = keyboard.KeyboardState()
         return self.keyboard
 
+    def _change_keyboard(self, invocation, change) -> None:
+        """Apply one user change to the keyboard state and show it at once.
+
+        A user change counts as activity (fiddling with the colour should not
+        happen in the dark). If the EC refuses the write, the state is rolled
+        back before the error goes out, so what the daemon remembers and
+        reports never claims a look the keys are not showing."""
+        created = self.keyboard is None
+        kbd = self._remember_keyboard()
+        before = dataclasses.replace(kbd)
+        change(kbd)
+        self.lighting.note_activity(time.monotonic())
+        try:
+            self._render_keyboard()
+        except Exception:
+            if created:
+                self.keyboard = None
+            else:
+                vars(kbd).update(vars(before))
+            raise
+        self._kbd_fault = None
+        self._sync_activity()
+        self._persist()
+        self._notify_keyboard()
+        invocation.return_value(None)
+
     def _set_keyboard_color(self, sender, params, invocation) -> None:
         r, g, b = params.unpack()
         if not all(0 <= c <= 255 for c in (r, g, b)):
@@ -510,11 +686,7 @@ class Daemon:
             return
         if not self._kbd_authorized(sender, invocation):
             return
-        keyboard.set_color(self.ec, r, g, b)
-        self._remember_keyboard().record_colour(r, g, b)
-        self._persist()
-        self._notify_keyboard()
-        invocation.return_value(None)
+        self._change_keyboard(invocation, lambda k: k.record_colour(r, g, b))
 
     def _set_keyboard_brightness(self, sender, params, invocation) -> None:
         (percent,) = params.unpack()
@@ -523,20 +695,48 @@ class Daemon:
             return
         if not self._kbd_authorized(sender, invocation):
             return
-        keyboard.set_brightness(self.ec, percent)
-        self._remember_keyboard().record_brightness(percent)
-        self._persist()
-        self._notify_keyboard()
-        invocation.return_value(None)
+        self._change_keyboard(invocation, lambda k: k.record_brightness(percent))
 
     def _set_keyboard_enabled(self, sender, params, invocation) -> None:
         (on,) = params.unpack()
         if not self._kbd_authorized(sender, invocation):
             return
-        keyboard.set_enabled(self.ec, on)
-        self._remember_keyboard().record_enabled(on)
-        self._persist()
-        self._notify_keyboard()
+        self._change_keyboard(invocation, lambda k: k.record_enabled(on))
+
+    def _set_keyboard_effect(self, sender, params, invocation) -> None:
+        effect, period_s = params.unpack()
+        try:
+            keyboard.check_effect(effect, period_s)
+        except ValueError as exc:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", str(exc))
+            return
+        if not self._kbd_authorized(sender, invocation):
+            return
+        self._change_keyboard(invocation, lambda k: k.record_effect(effect, period_s))
+
+    def _set_keyboard_idle_timeout(self, sender, params, invocation) -> None:
+        (seconds,) = params.unpack()
+        try:
+            keyboard.check_idle_timeout(seconds)
+        except ValueError as exc:
+            invocation.return_dbus_error(f"{_ERR}.InvalidArgs", str(exc))
+            return
+        if not self._kbd_authorized(sender, invocation):
+            return
+        self._change_keyboard(invocation, lambda k: k.record_idle_timeout(seconds))
+
+    def _set_keyboard_notify_flash(self, sender, params, invocation) -> None:
+        (on,) = params.unpack()
+        if not self._kbd_authorized(sender, invocation):
+            return
+        self._change_keyboard(invocation, lambda k: k.record_notify_flash(on))
+
+    def _flash_keyboard(self, sender, invocation) -> None:
+        if not self._kbd_authorized(sender, invocation):
+            return
+        # A flash is not typing: dimmed keys blink and go dark again.
+        if self.lighting.start_flash(time.monotonic()):
+            self._render_keyboard()
         invocation.return_value(None)
 
     def stop(self) -> None:

@@ -36,7 +36,7 @@ Confirmed hardware/product capabilities (all proven live on a G6 KF):
 
 - Fans: per-fan duty 0–100 % (2 fans: CPU/GPU), instant handback to firmware-auto, live RPM + CPU/GPU temperatures.
 - Fan curves (v1 scope, confirmed): automatic temperature→duty curves executed by a background service. Curve data model **not yet decided** (map ticket #8).
-- Keyboard: single-zone RGB color + brightness 0–255 + on/off. Not per-key, not multi-zone.
+- Keyboard: single-zone RGB color + brightness 0–255 + on/off, plus software effects the daemon drives (colour cycle, breathing, CPU-heat colour), auto-off after no typing, and a flash on desktop notifications. Not per-key, not multi-zone.
 - Safety invariants the UI must surface, never hide: DMI model guard (Gigabyte G5/G6/G7 only), write-verification with auto-revert, firmware-auto as the failsafe state, reboot always resets the EC.
 
 Constraints:

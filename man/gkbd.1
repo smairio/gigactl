@@ -15,6 +15,18 @@ gkbd \- control the keyboard backlight on Gigabyte G5/G6 laptops
 .br
 .B gkbd on
 .br
+.B gkbd effect
+.I name
+.RI [ speed ]
+.br
+.B gkbd idle
+.IR time | off
+.br
+.B gkbd notify
+.BR on | off
+.br
+.B gkbd flash
+.br
 .B gkbd status
 .br
 .B gkbd apply
@@ -94,8 +106,57 @@ Switch the backlight off.
 .B on
 Switch the backlight on, restoring the last colour and brightness.
 .TP
+.B effect \fIname\fR [\fIspeed\fR]
+Choose what the light does over time:
+.B static
+(one steady colour),
+.B cycle
+(a slow walk around the colour wheel),
+.B breathe
+(the chosen colour fades in and out) or
+.B temp
+(the colour follows the CPU temperature, blue when cool to red when hot).
+.I speed
+is the time for one full loop of
+.B cycle
+or
+.BR breathe ,
+written like
+.BR 30s ,
+.B 5m
+or
+.BR 1h .
+Choosing a colour while
+.B cycle
+or
+.B temp
+is running switches back to
+.BR static .
+Needs the daemon.
+.TP
+.B idle \fItime\fR|\fBoff\fR
+Fade the light to dark after
+.I time
+without typing (for example
+.B 30s
+or
+.BR 2m );
+any key press brings it straight back.
+.B off
+keeps it on. The daemon reads the keyboard devices only to notice that a key
+was pressed, never which one, and only while this is set. Needs the daemon.
+.TP
+.B notify on\fR|\fBoff
+Blink the keys white when a desktop notification arrives. The notifications are
+watched by the GigaControl app in your session, so it must be running (it
+autostarts in the tray). Needs the daemon.
+.TP
+.B flash
+Blink the keys once now, to see what a notification looks like.
+.TP
 .B status
-Print the current colour and brightness. In daemon mode this is what the daemon
+Print the current colour and brightness, and the effect, auto\-off and
+notification settings. In daemon mode this is what the daemon
 holds; in direct mode it is what
 .B gkbd
 last saved.

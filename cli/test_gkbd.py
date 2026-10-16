@@ -60,7 +60,7 @@ def test_status_reports_what_the_daemon_holds(sandbox):
     # the fake daemon holds R=255 G=128 B=0 at 60%
     assert "R=255" in result.stdout and "G=128" in result.stdout and "B=0" in result.stdout
     assert "60%" in result.stdout
-    assert sandbox.properties_read() == ["KeyboardState", "EcStatus"]
+    assert sandbox.properties_read() == ["KeyboardState", "KeyboardEffects", "EcStatus"]
     assert sandbox.ec_calls == []
 
 
@@ -205,3 +205,57 @@ def test_status_warns_when_the_daemon_cannot_drive_the_ec(sandbox):
 def test_status_says_nothing_extra_when_the_ec_is_healthy(sandbox):
     result = sandbox.run("gkbd", "status", daemon=True)
     assert "modprobe" not in result.output
+
+
+# --- effects, auto-off, flashing (daemon only) -------------------------------
+
+def test_effect_goes_through_the_daemon_with_a_speed(sandbox):
+    result = sandbox.run("gkbd", "effect", "cycle", "5m", daemon=True)
+    assert result.returncode == 0, result.output
+    assert sandbox.dbus_calls() == [["SetKeyboardEffect", "su", "cycle", "300"]]
+
+
+def test_effect_aliases_and_default_speed(sandbox):
+    sandbox.run("gkbd", "effect", "rainbow", daemon=True)
+    sandbox.run("gkbd", "effect", "temp", daemon=True)
+    assert sandbox.dbus_calls() == [["SetKeyboardEffect", "su", "cycle", "0"],
+                                    ["SetKeyboardEffect", "su", "temperature", "0"]]
+
+
+def test_unknown_effect_is_refused_before_the_bus(sandbox):
+    result = sandbox.run("gkbd", "effect", "disco", daemon=True)
+    assert result.returncode != 0
+    assert sandbox.dbus_calls() == []
+
+
+def test_idle_accepts_plain_words_for_time(sandbox):
+    for arg in ("30s", "2m", "45", "off"):
+        sandbox.run("gkbd", "idle", arg, daemon=True)
+    assert [c[2] for c in sandbox.dbus_calls()] == ["30", "120", "45", "0"]
+
+
+def test_idle_rejects_nonsense(sandbox):
+    result = sandbox.run("gkbd", "idle", "soon", daemon=True)
+    assert result.returncode != 0
+    assert sandbox.dbus_calls() == []
+
+
+def test_notify_and_flash_go_through_the_daemon(sandbox):
+    sandbox.run("gkbd", "notify", "on", daemon=True)
+    sandbox.run("gkbd", "flash", daemon=True)
+    assert sandbox.dbus_calls() == [["SetKeyboardNotifyFlash", "b", "true"],
+                                    ["FlashKeyboard"]]
+
+
+def test_status_reports_effects(sandbox):
+    result = sandbox.run("gkbd", "status", daemon=True)
+    assert "effect: cycle (one loop every 300s)" in result.stdout
+    assert "after 30s without typing" in result.stdout
+    assert "notification flash: on" in result.stdout
+
+
+def test_effects_without_the_daemon_say_what_is_needed(sandbox):
+    result = sandbox.run("gkbd", "idle", "30s", daemon=False)
+    assert result.returncode != 0
+    assert "needs the gigactl daemon" in result.output
+    assert sandbox.ec_calls == []

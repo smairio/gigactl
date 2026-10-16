@@ -23,7 +23,7 @@ On each poll it publishes a
 signal \(em CPU and GPU temperature, both fans' RPM and duty cycle \(em and runs
 the active fan profile, applying whatever duty cycle the curve calls for at the
 current temperature. It also remembers the fan profile, the custom curves and the
-keyboard colour and brightness, re\-applying them at boot and after resume from
+keyboard colour, brightness and lighting effects, re\-applying them at boot and after resume from
 suspend.
 .PP
 Every write is authorised through polkit before it happens, using the caller's
@@ -77,14 +77,20 @@ Methods:
 .BR SetProfile ,
 .BR SetCurve ,
 .BR SetKeyboardColor ,
-.B SetKeyboardBrightness
+.BR SetKeyboardBrightness ,
+.BR SetKeyboardEnabled ,
+.BR SetKeyboardEffect ,
+.BR SetKeyboardIdleTimeout ,
+.B SetKeyboardNotifyFlash
 and
-.BR SetKeyboardEnabled .
+.BR FlashKeyboard .
 Properties:
 .BR DaemonVersion ,
 .BR ActiveProfile ,
 .BR Telemetry ,
-.B KeyboardState
+.BR KeyboardState ,
+.BR KeyboardEffects ,
+.B KeyboardIdle
 and
 .BR Curves .
 Reading is unrestricted; every method is gated by polkit.
