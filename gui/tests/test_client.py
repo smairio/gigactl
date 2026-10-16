@@ -68,7 +68,12 @@ def _errors_from(action) -> list[str]:
     lambda c: c.set_keyboard_brightness(50),
     lambda c: c.set_keyboard_enabled(True),
     lambda c: c.set_curve("cpu", [(40, 30)], True),
-], ids=["profile", "colour", "brightness", "enabled", "curve"])
+    lambda c: c.set_keyboard_effect("cycle", 300),
+    lambda c: c.set_keyboard_idle_timeout(30),
+    lambda c: c.set_keyboard_notify_flash(True),
+    lambda c: c.flash_keyboard(),
+], ids=["profile", "colour", "brightness", "enabled", "curve",
+        "effect", "idle", "notify-flash", "flash"])
 def test_control_call_without_daemon_reports_not_running(action):
     seen = _errors_from(action)
     assert seen, "a control call with no daemon must surface an error"
@@ -109,3 +114,24 @@ def test_ec_status_is_empty_against_a_daemon_too_old_to_have_it():
     """An install can be older than the app talking to it; a missing property
     means nothing to report, not a problem to announce."""
     assert _client_with({}).ec_status() == ""
+
+
+def test_quiet_flash_without_daemon_says_nothing():
+    # a missed notification flash is not worth an error toast
+    assert _errors_from(lambda c: c.flash_keyboard(quiet=True)) == []
+
+
+def test_effects_and_idle_read_the_properties():
+    from gi.repository import GLib
+    c = _client_with({
+        "KeyboardEffects": GLib.Variant("(suub)", ("cycle", 300, 30, True)),
+        "KeyboardIdle": GLib.Variant("b", True),
+    })
+    assert c.keyboard_effects().effect == "cycle"
+    assert c.keyboard_idle() is True
+
+
+def test_older_daemon_has_no_effects():
+    c = _client_with({})
+    assert c.keyboard_effects() is None  # the window hides those controls
+    assert c.keyboard_idle() is False

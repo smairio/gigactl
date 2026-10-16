@@ -28,6 +28,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 from . import model as model_mod  # noqa: E402
 from . import lifetime, profiles, tray_menu  # noqa: E402
 from .client import DaemonClient  # noqa: E402
+from .notify_watch import NotificationWatcher  # noqa: E402
 from .tray import TrayIcon  # noqa: E402
 from .window import OverviewWindow  # noqa: E402
 
@@ -100,6 +101,10 @@ class GigactlApp(Adw.Application):
         # window; "answered then went away" (a screen lock, a shell restart) is
         # waited out silently — see lifetime.should_offer_window.
         self._tray_ever_registered = False
+        # Watches the session for notifications while "Flash on notifications"
+        # is on. Owned by the app, not the window, so it works from the tray.
+        self._notify_watch = NotificationWatcher(
+            self._on_notification, own_app_ids=(APP_ID, "GigaControl"))
 
     # --- lifecycle -----------------------------------------------------------
     def do_startup(self) -> None:
@@ -133,6 +138,7 @@ class GigactlApp(Adw.Application):
             self._grace_source = 0
         if self._tray:
             self._tray.stop()
+        self._notify_watch.stop()
         Adw.Application.do_shutdown(self)
 
     # --- tray ----------------------------------------------------------------
@@ -223,7 +229,25 @@ class GigactlApp(Adw.Application):
             return
         self._sync_hold()
 
+    def _sync_notify_watch(self) -> None:
+        """Watch notifications only while the daemon says flashing is on and
+        the light is on — otherwise there is nothing to flash."""
+        client = self._tray_client
+        effects = client.keyboard_effects() if client else None
+        keyboard = client.keyboard_state() if client else None
+        wanted = bool(effects and effects.notify_flash
+                      and keyboard and keyboard.enabled)
+        if wanted and not self._notify_watch.running:
+            self._notify_watch.start()
+        elif not wanted and self._notify_watch.running:
+            self._notify_watch.stop()
+
+    def _on_notification(self) -> None:
+        if self._tray_client is not None:
+            self._tray_client.flash_keyboard(quiet=True)
+
     def _refresh_tray(self) -> None:
+        self._sync_notify_watch()
         if not self._tray or not self._tray_client:
             return
         client = self._tray_client

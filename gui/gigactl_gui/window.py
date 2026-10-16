@@ -27,7 +27,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-from . import palette, profiles, temperature  # noqa: E402
+from . import lighting, palette, profiles, temperature  # noqa: E402
 from .client import DaemonClient, Telemetry  # noqa: E402
 from .curve_page import CurvePage  # noqa: E402
 from .gauge import TempGauge  # noqa: E402
@@ -62,7 +62,7 @@ class OverviewWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, model: Model) -> None:
         super().__init__(application=app)
         self.set_title("GigaControl")
-        self.set_default_size(760, 720)
+        self.set_default_size(780, 860)
 
         self._model = model
         self._syncing = False
@@ -268,6 +268,9 @@ class OverviewWindow(Adw.ApplicationWindow):
         return box
 
     def _build_keyboard(self) -> Gtk.Box:
+        """Everything the Windows Control Center offered, up front rather than
+        two clicks deep: a live preview, the full colour grid, brightness, the
+        effect, the auto-off timer and notification flashing."""
         self._switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self._switch.set_tooltip_text("Turn the keyboard backlight on or off")
         self._switch.connect("notify::active", self._on_switch_toggled)
@@ -284,50 +287,165 @@ class OverviewWindow(Adw.ApplicationWindow):
         header.append(self._colour_label)
         header.append(self._switch)
 
-        swatch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        # The preview, wide, like the keyboard picture in the Windows app.
+        self._preview = KeyboardPreview()
+        self._preview.set_hexpand(True)
+        self._preview_caption = Gtk.Label(xalign=0.5)
+        self._preview_caption.add_css_class("metric-sub")
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.append(header)
+        box.append(self._preview)
+        box.append(self._preview_caption)
+        box.append(self._build_colour_grid())
+        box.append(self._build_brightness())
+        box.append(self._build_effects())
+        box.append(self._build_light_settings())
+        return box
+
+    def _build_colour_grid(self) -> Gtk.Widget:
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6,
+                        column_homogeneous=True, halign=Gtk.Align.FILL)
         self._swatches: list[tuple[Gtk.Button, palette.RGB]] = []
-        for name, rgb in palette.SWATCHES:
+        for i, (name, rgb) in enumerate(palette.SWATCHES):
             button = self._build_swatch(name, rgb)
-            swatch_row.append(button)
+            grid.attach(button, i % palette.GRID_COLUMNS, i // palette.GRID_COLUMNS, 1, 1)
             self._swatches.append((button, rgb))
             self._controls.append(button)
 
         self._color_button = Gtk.ColorDialogButton(
             dialog=Gtk.ColorDialog(title="Keyboard colour", with_alpha=False),
-            valign=Gtk.Align.CENTER)
+            valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
         self._color_button.set_tooltip_text("Pick any colour")
+        self._color_button.update_property([Gtk.AccessibleProperty.LABEL],
+                                           ["Pick any colour"])
         self._color_button.connect("notify::rgba", self._on_custom_colour)
         self._controls.append(self._color_button)
-        swatch_row.append(self._color_button)
+        n = len(palette.SWATCHES)
+        grid.attach(self._color_button, n % palette.GRID_COLUMNS,
+                    n // palette.GRID_COLUMNS, 1, 1)
+        return grid
 
-        brightness_label = Gtk.Label(label="Brightness", xalign=0.0)
-        brightness_label.add_css_class("row-label")
+    def _build_brightness(self) -> Gtk.Widget:
+        label = Gtk.Label(label="Brightness", xalign=0.0)
+        label.add_css_class("row-label")
         self._brightness = Gtk.Scale.new_with_range(
             Gtk.Orientation.HORIZONTAL, 0, 100, 5)
         # No number until the daemon tells us one, so the slider never claims a
         # brightness we have not been told about (the hero shows "-" likewise).
         self._brightness.set_draw_value(False)
         self._brightness.set_value_pos(Gtk.PositionType.RIGHT)
+        self._brightness.set_format_value_func(lambda _s, v: f"{int(v)} %")
         self._brightness.set_hexpand(True)
+        for mark in (25, 50, 75):
+            self._brightness.add_mark(mark, Gtk.PositionType.BOTTOM, None)
         self._brightness.connect("value-changed", self._on_brightness_changed)
+        self._brightness.update_property([Gtk.AccessibleProperty.LABEL], ["Brightness"])
         self._controls.append(self._brightness)
 
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
-                       hexpand=True, valign=Gtk.Align.CENTER)
-        left.append(swatch_row)
-        left.append(brightness_label)
-        left.append(self._brightness)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        row.append(label)
+        row.append(self._brightness)
+        return row
 
-        self._preview = KeyboardPreview()
+    def _build_effects(self) -> Gtk.Widget:
+        """Effect picker, in the same linked-button style as the fan profiles."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, homogeneous=True)
+        row.add_css_class("linked")
+        self._effect_buttons: dict[str, Gtk.ToggleButton] = {}
+        group: Gtk.ToggleButton | None = None
+        for effect in lighting.EFFECTS:
+            button = Gtk.ToggleButton()
+            button.add_css_class("profile-btn")
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            name = Gtk.Label(label=effect.label)
+            name.add_css_class("profile-name")
+            sub = Gtk.Label(label=effect.subtitle)
+            sub.add_css_class("profile-sub")
+            inner.append(name)
+            inner.append(sub)
+            button.set_child(inner)
+            button.set_tooltip_text(f"{effect.label} — {effect.subtitle}")
+            if group is None:
+                group = button
+            else:
+                button.set_group(group)
+            button.connect("toggled", self._on_effect_toggled, effect.id)
+            row.append(button)
+            self._effect_buttons[effect.id] = button
+            self._controls.append(button)
 
-        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=24)
-        body.append(left)
-        body.append(self._preview)
+        title = Gtk.Label(label="Effect", xalign=0.0)
+        title.add_css_class("row-label")
+        self._effects_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._effects_box.append(title)
+        self._effects_box.append(row)
+        return self._effects_box
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.append(header)
-        box.append(body)
-        return box
+    def _build_light_settings(self) -> Gtk.Widget:
+        """Speed, auto-off and notification flash, as native settings rows."""
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        rows.add_css_class("boxed-list")
+
+        # Speed: only meaningful for cycle and breathing, so hidden otherwise.
+        self._speed_values: list[int] = []
+        self._speed = Gtk.DropDown(valign=Gtk.Align.CENTER)
+        self._speed.connect("notify::selected", self._on_speed_selected)
+        self._speed.update_property([Gtk.AccessibleProperty.LABEL], ["Effect speed"])
+        self._controls.append(self._speed)
+        self._speed_row = Adw.ActionRow(title="Speed",
+                                        subtitle="How long one full loop takes")
+        self._speed_row.add_suffix(self._speed)
+        rows.append(self._speed_row)
+
+        self._idle_values: list[int] = []
+        self._idle = Gtk.DropDown(valign=Gtk.Align.CENTER)
+        self._idle.connect("notify::selected", self._on_idle_selected)
+        self._idle.update_property([Gtk.AccessibleProperty.LABEL],
+                                   ["Turn off when not typing"])
+        self._controls.append(self._idle)
+        self._set_dropdown(self._idle, self._idle_values,
+                           [(v, lighting.duration_text(v)) for v in lighting.IDLE_CHOICES], 0)
+        idle_row = Adw.ActionRow(
+            title="Turn off when not typing",
+            subtitle="The keys fade to dark. Any key brings them back.")
+        idle_row.add_suffix(self._idle)
+        rows.append(idle_row)
+
+        self._flash_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self._flash_switch.connect("notify::active", self._on_flash_toggled)
+        self._flash_switch.update_property([Gtk.AccessibleProperty.LABEL],
+                                           ["Flash on notifications"])
+        self._controls.append(self._flash_switch)
+        self._flash_try = Gtk.Button(label="Try it", valign=Gtk.Align.CENTER)
+        self._flash_try.add_css_class("flat")
+        self._flash_try.set_tooltip_text("Flash the keys once now")
+        self._flash_try.connect("clicked", lambda _b: self._client.flash_keyboard())
+        self._controls.append(self._flash_try)
+        flash_row = Adw.ActionRow(
+            title="Flash on notifications",
+            subtitle="The keys blink white when a message or alert arrives")
+        flash_row.add_suffix(self._flash_try)
+        flash_row.add_suffix(self._flash_switch)
+        flash_row.set_activatable_widget(self._flash_switch)
+        rows.append(flash_row)
+
+        self._light_settings = rows
+        return rows
+
+    def _set_dropdown(self, dropdown: Gtk.DropDown, values: list[int],
+                      choices: list[tuple[int, str]], current: int) -> None:
+        """Refill a dropdown only when its choices changed, then select
+        ``current``. Programmatic: guarded so it is not mistaken for a click."""
+        was_syncing, self._syncing = self._syncing, True
+        try:
+            if [v for v, _ in choices] != values:
+                values[:] = [v for v, _ in choices]
+                dropdown.set_model(Gtk.StringList.new([label for _, label in choices]))
+            if current in values:
+                dropdown.set_selected(values.index(current))
+        finally:
+            self._syncing = was_syncing
 
     def _build_swatch(self, name: str, rgb: palette.RGB) -> Gtk.Button:
         """A button that paints itself in the exact colour it will send, so the
@@ -337,7 +455,8 @@ class OverviewWindow(Adw.ApplicationWindow):
         area.set_content_height(26)
         area.set_draw_func(self._draw_swatch, rgb)
 
-        button = Gtk.Button(child=area)
+        button = Gtk.Button(child=area, halign=Gtk.Align.CENTER,
+                            valign=Gtk.Align.CENTER)
         button.add_css_class("swatch")
         button.set_tooltip_text(name)
         # colour is never the only signal (DESIGN.md a11y): the name is the
@@ -413,6 +532,39 @@ class OverviewWindow(Adw.ApplicationWindow):
             self._client.set_keyboard_brightness(pending)
         return GLib.SOURCE_REMOVE
 
+    def _on_effect_toggled(self, button: Gtk.ToggleButton, effect_id: str) -> None:
+        if self._syncing or not button.get_active():
+            return
+        # Switching effect restarts at that effect's default speed: a speed is
+        # "seconds per loop", and a 5-minute breath would look broken.
+        self._client.set_keyboard_effect(effect_id, 0)
+
+    def _on_speed_selected(self, dropdown: Gtk.DropDown, _param) -> None:
+        if self._syncing:
+            return
+        i = dropdown.get_selected()
+        effect = self._current_effect()
+        if effect and 0 <= i < len(self._speed_values):
+            self._client.set_keyboard_effect(effect, self._speed_values[i])
+
+    def _on_idle_selected(self, dropdown: Gtk.DropDown, _param) -> None:
+        if self._syncing:
+            return
+        i = dropdown.get_selected()
+        if 0 <= i < len(self._idle_values):
+            self._client.set_keyboard_idle_timeout(self._idle_values[i])
+
+    def _on_flash_toggled(self, switch: Gtk.Switch, _param) -> None:
+        if self._syncing:
+            return
+        self._client.set_keyboard_notify_flash(switch.get_active())
+
+    def _current_effect(self) -> str | None:
+        for effect_id, button in self._effect_buttons.items():
+            if button.get_active():
+                return effect_id
+        return None
+
     # --- daemon state --------------------------------------------------------
     def _sync_from_daemon(self) -> None:
         """Pull the authoritative state back out of the daemon's properties."""
@@ -442,6 +594,8 @@ class OverviewWindow(Adw.ApplicationWindow):
                     self._custom_button.remove_css_class("chosen")
             self._curve_page.sync_from_daemon()
             keyboard = self._client.keyboard_state()
+            effects = self._client.keyboard_effects()
+            self._sync_light_settings(effects)
             if keyboard:
                 self._switch.set_active(keyboard.enabled)
                 if self._brightness_source == 0:
@@ -450,16 +604,42 @@ class OverviewWindow(Adw.ApplicationWindow):
                     self._brightness.set_value(keyboard.brightness_pct)
                     self._brightness.set_draw_value(True)  # now it is real
                 self._select_swatch(keyboard.rgb)
-                self._preview.update(keyboard.rgb, enabled=keyboard.enabled,
-                                     brightness_pct=keyboard.brightness_pct)
+                self._echo_preview(keyboard.rgb)
         finally:
             self._syncing = False
 
+    def _sync_light_settings(self, effects) -> None:
+        """Show the daemon's effect, speed, auto-off and flash settings. A
+        daemon too old to have them reports none, and the controls hide rather
+        than offer what it would refuse."""
+        supported = effects is not None
+        self._effects_box.set_visible(supported)
+        self._light_settings.set_visible(supported)
+        if not supported:
+            return
+        button = self._effect_buttons.get(effects.effect)
+        if button is not None:
+            button.set_active(True)
+        speeds = lighting.speed_choices(effects.effect, effects.period_s)
+        self._speed_row.set_visible(bool(speeds))
+        if speeds:
+            self._set_dropdown(self._speed, self._speed_values, speeds, effects.period_s)
+        self._set_dropdown(
+            self._idle, self._idle_values,
+            [(v, lighting.duration_text(v))
+             for v in lighting.idle_choices(effects.idle_timeout_s)],
+            effects.idle_timeout_s)
+        self._flash_switch.set_active(effects.notify_flash)
+
     def _select_swatch(self, rgb: palette.RGB) -> None:
         match = palette.name_for(rgb)
-        self._colour_label.set_text(match or "Custom colour")
+        self._colour_label.set_text(self._describe_light(match or "Custom colour"))
+        # Cycle and CPU heat choose their own colours, so no swatch is "on".
+        effects = self._client.keyboard_effects()
+        colour_in_use = effects is None or effects.effect not in (
+            lighting.CYCLE, lighting.TEMPERATURE)
         for button, value in self._swatches:
-            chosen = bool(match) and value == tuple(rgb)
+            chosen = colour_in_use and bool(match) and value == tuple(rgb)
             if chosen:
                 button.add_css_class("selected")
             else:
@@ -480,15 +660,47 @@ class OverviewWindow(Adw.ApplicationWindow):
         finally:
             self._syncing = was_syncing
 
+    def _describe_light(self, colour_name: str) -> str:
+        """The header's words for what the keys are doing — colour is never
+        the only signal (DESIGN.md a11y), and neither is motion."""
+        effects = self._client.keyboard_effects()
+        if effects is None or effects.effect == lighting.STATIC:
+            text = colour_name
+        elif effects.effect in (lighting.CYCLE, lighting.TEMPERATURE):
+            text = lighting.effect_label(effects.effect)
+        else:
+            text = f"{colour_name} · {lighting.effect_label(effects.effect).lower()}"
+        if self._client.keyboard_idle():
+            text += " · dark until you type"
+        return text
+
     def _echo_preview(self, rgb: palette.RGB | None = None) -> None:
         """Repaint the preview from what the widgets currently show."""
         if rgb is None:
             rgb = _rgb_from_rgba(self._color_button.get_rgba())
+        effects = self._client.keyboard_effects()
+        dimmed = self._client.keyboard_idle()
         self._preview.update(rgb, enabled=self._switch.get_active(),
-                             brightness_pct=int(self._brightness.get_value()))
+                             brightness_pct=int(self._brightness.get_value()),
+                             effect=effects.effect if effects else lighting.STATIC,
+                             period_s=effects.period_s if effects else 0,
+                             dimmed=dimmed)
+        if not self._switch.get_active():
+            caption = ""
+        elif dimmed:
+            caption = "Dark because nobody is typing — press any key"
+        elif effects and effects.idle_timeout_s:
+            caption = (f"Turns off after "
+                       f"{lighting.duration_text(effects.idle_timeout_s).lower()} "
+                       f"without typing")
+        else:
+            caption = ""
+        self._preview_caption.set_text(caption)
+        self._preview_caption.set_visible(bool(caption))
 
     # --- live updates --------------------------------------------------------
     def _on_telemetry(self, t: Telemetry) -> None:
+        self._preview.set_cpu_temp(t.cpu_temp)
         self._cpu_gauge.set_temp(t.cpu_temp)
         self._gpu_gauge.set_temp(t.gpu_temp)
         text, band = temperature.summary(t.cpu_temp, t.gpu_temp)

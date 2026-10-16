@@ -39,6 +39,7 @@ DEFAULT_PROPS = {
     "Telemetry": "(uuuuuu) 61 50 4200 4000 60 56",
     "ActiveProfile": 's "manual"',
     "KeyboardState": "(buuuu) true 255 128 0 60",
+    "KeyboardEffects": '(suub) "cycle" 300 30 true',
     "DaemonVersion": 's "1.0.0"',
     # Empty is healthy: the EC is doing what it is told.
     "EcStatus": 's ""',

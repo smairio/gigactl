@@ -5,24 +5,31 @@ depiction of the physical backlight." So it is literal: the keys carry the exact
 RGB the daemon was given, dimmed by the real brightness, dark when the backlight
 is off, and *unlit with no colour at all* until the daemon has actually told us
 what the backlight is doing (the hero shows "—" for the same reason).
+
+Effects animate here too, computed from the wall clock with the daemon's own
+formulas (``backlight.frame``) so the preview and the keys agree without the
+daemon streaming frames. The animation runs on a frame-clock tick callback,
+which GTK pauses by itself while the window is hidden; it is removed entirely
+for still looks. Dark-because-idle shows dark, because that is the truth.
 """
 from __future__ import annotations
 
 import math
+import time
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from . import style  # noqa: E402
-from .backlight import intensity  # noqa: E402
+from . import lighting, style  # noqa: E402
+from .backlight import frame, intensity, is_animated  # noqa: E402
 
-_WIDTH = 268
-_HEIGHT = 116
-_COLS = 14
-_ROWS = 4
+_WIDTH = 268   # minimum; the preview stretches to the row
+_HEIGHT = 128
+_COLS = 15
+_ROWS = 5
 _PAD = 14
 _GAP = 3.0
 
@@ -44,8 +51,13 @@ class KeyboardPreview(Adw.Bin):
         self._rgb = (0, 0, 0)
         self._glow = 0.0
         self._known = False  # nothing claimed until the daemon reports
+        self._effect = lighting.STATIC
+        self._period_s = 0
+        self._dimmed = False
+        self._cpu_temp: float | None = None
+        self._tick_id = 0
 
-        area = Gtk.DrawingArea()
+        area = Gtk.DrawingArea(hexpand=True)
         area.set_content_width(_WIDTH)
         area.set_content_height(_HEIGHT)
         area.set_draw_func(self._draw)
@@ -56,17 +68,51 @@ class KeyboardPreview(Adw.Bin):
         self.set_tooltip_text("Keyboard backlight preview — waiting for the daemon")
 
     def update(self, rgb: tuple[int, int, int], *, enabled: bool,
-               brightness_pct: int) -> None:
+               brightness_pct: int, effect: str = lighting.STATIC,
+               period_s: int = 0, dimmed: bool = False) -> None:
         self._rgb = tuple(max(0, min(255, int(c))) for c in rgb)
-        self._glow = intensity(enabled, brightness_pct)
+        self._glow = 0.0 if dimmed else intensity(enabled, brightness_pct)
+        self._effect = effect
+        self._period_s = period_s
+        self._dimmed = dimmed
         self._known = True
-        state = "off" if self._glow == 0 else f"{int(self._glow * 100)}%"
+        if dimmed:
+            state = "dark until you type"
+        elif self._glow == 0:
+            state = "off"
+        else:
+            state = f"{int(self._glow * 100)}%"
         self.set_tooltip_text(f"Keyboard backlight preview — {state}")
+        self._sync_animation()
         self._area.queue_draw()
 
+    def set_cpu_temp(self, temp_c: float | None) -> None:
+        """Feeds the CPU-heat effect. Smoothed like the daemon's, so the
+        preview drifts the way the keys do instead of jumping."""
+        if temp_c is None or self._cpu_temp is None:
+            self._cpu_temp = temp_c
+        else:
+            self._cpu_temp += 0.35 * (temp_c - self._cpu_temp)
+        if self._effect == lighting.TEMPERATURE:
+            self._area.queue_draw()
+
+    def _sync_animation(self) -> None:
+        wanted = self._known and self._glow > 0 and is_animated(self._effect)
+        if wanted and not self._tick_id:
+            self._tick_id = self._area.add_tick_callback(self._on_tick)
+        elif not wanted and self._tick_id:
+            self._area.remove_tick_callback(self._tick_id)
+            self._tick_id = 0
+
+    def _on_tick(self, area, _clock) -> bool:
+        area.queue_draw()
+        return GLib.SOURCE_CONTINUE
+
     def _draw(self, _area, cr, width, height, *_data) -> None:
-        r, g, b = (c / 255 for c in self._rgb)
-        glow = self._glow if self._known else 0.0
+        rgb, glow = frame(self._effect, self._period_s, self._rgb,
+                          self._glow if self._known else 0.0, time.time(),
+                          self._cpu_temp)
+        r, g, b = (c / 255 for c in rgb)
         dark = style.is_dark()
 
         # the keyboard plate

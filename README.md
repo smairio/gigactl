@@ -9,7 +9,7 @@ Gigabyte ships no Linux software for its G-series laptops. The firmware fan curv
 | Tool | What it does |
 |------|--------------|
 | `gfan` | Manual fan speed (per-fan %), live temps + RPM, instant return to firmware auto |
-| `gkbd` | Keyboard backlight color (single-zone RGB), brightness, on/off — persists across reboot and suspend |
+| `gkbd` | Keyboard backlight color (single-zone RGB), brightness, on/off, effects (colour cycle, breathing, CPU-heat colour), auto-off when you stop typing, flash on notifications — persists across reboot and suspend |
 
 Both tools check for the `gigactl` daemon first. When it is running they drive it
 over D-Bus — no `sudo`, no `ec_probe`, and no risk of two writers taking turns on
@@ -116,6 +116,41 @@ gkbd status
 ```
 
 Your color is saved and re-applied automatically at boot and after suspend.
+
+#### Effects, auto-off and notification flash
+
+These need the daemon (it runs the timers). All of them are also on the main
+window of the app, next to a live preview of the keyboard.
+
+```bash
+gkbd idle 30s           # fade the keys to dark after 30 s without typing; any key brings them back
+gkbd idle 2m            # ...or 2 minutes (any time from 5s to 24h)
+gkbd idle off           # keep them on
+
+gkbd effect cycle 5m    # slow rainbow: walks the whole colour wheel every 5 minutes
+gkbd effect breathe 6s  # the chosen colour fades in and out
+gkbd effect temp        # colour follows CPU heat: blue when cool, red when hot
+gkbd effect static      # back to one steady colour (picking a colour does this too)
+
+gkbd notify on          # blink the keys white when a desktop notification arrives
+gkbd flash              # see what that looks like
+```
+
+How they work, briefly:
+
+- **Auto-off** is the Windows Control Center's "Keyboard Sleep timer". The daemon
+  reads the keyboard input devices (`/dev/input/event*`) only to learn *that* a
+  key was pressed — the data is thrown away unparsed, never which key — and only
+  while an auto-off time is set. It works the same on Wayland, X11 and the console.
+- **Effects** run in the daemon, which sends the EC only what changed each step
+  (one brightness command per breathing frame, one colour command per cycle
+  step, nothing at all for a steady colour).
+- **Notification flash** is done by the app in your session (it autostarts in
+  the tray): it watches the session bus for apps posting notifications and asks
+  the daemon to blink. Volume/brightness pop-ups, low-priority notices and
+  progress updates are skipped, and a burst blinks once.
+
+The keyboard is one zone, so there is no per-key or left/middle/right lighting.
 
 ## How it works (short version)
 
