@@ -27,7 +27,7 @@ from . import lighting, style  # noqa: E402
 from .backlight import frame, intensity, is_animated  # noqa: E402
 
 _WIDTH = 268   # minimum; the preview stretches to the row
-_HEIGHT = 128
+_HEIGHT = 96
 _COLS = 15
 _ROWS = 5
 _PAD = 14

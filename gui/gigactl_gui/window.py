@@ -29,6 +29,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 from . import lighting, palette, profiles, temperature  # noqa: E402
 from .client import DaemonClient, Telemetry  # noqa: E402
+from .colour_square import ColourSquare  # noqa: E402
 from .curve_page import CurvePage  # noqa: E402
 from .gauge import TempGauge  # noqa: E402
 from .banner import banner as banner_for
@@ -39,15 +40,16 @@ from .preview import KeyboardPreview  # noqa: E402
 # instead of firing one call per pixel.
 _BRIGHTNESS_DEBOUNCE_MS = 180
 
+# Default window width, and the height the title bar adds to the content's.
+_WIDTH = 800
+_HEADER_ALLOWANCE = 56
+_PANEL_ALLOWANCE = 90
+
 
 def _rpm(value: int) -> str:
     # Group thousands with a narrow no-break space (U+202F) so it reads "4 637"
     # and never wraps mid-value.
     return f"{value:,}".replace(",", " ")
-
-
-def _rgb_from_rgba(rgba: Gdk.RGBA) -> tuple[int, int, int]:
-    return (round(rgba.red * 255), round(rgba.green * 255), round(rgba.blue * 255))
 
 
 def _section_title(text: str) -> Gtk.Label:
@@ -62,12 +64,17 @@ class OverviewWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, model: Model) -> None:
         super().__init__(application=app)
         self.set_title("GigaControl")
-        self.set_default_size(780, 860)
+        self.set_default_size(_WIDTH, 860)
 
         self._model = model
         self._syncing = False
         self._brightness_source = 0
         self._pending_brightness: int | None = None
+        # Colour picked on the square or typed as R/G/B: like brightness, sent
+        # after a short pause so a drag is not a flood of EC writes.
+        self._colour_source = 0
+        self._pending_colour: palette.RGB | None = None
+        self._shown_rgb: palette.RGB = (0, 0, 0)
         # Last profile the daemon told us about. Gio clears the proxy's property
         # cache when the daemon goes away, so without this a failed click would
         # leave the row showing a profile that never took effect.
@@ -82,9 +89,9 @@ class OverviewWindow(Adw.ApplicationWindow):
                                     on_state=self._sync_from_daemon,
                                     on_error=self.show_error)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-        content.set_margin_top(20)
-        content.set_margin_bottom(20)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
         content.set_margin_start(20)
         content.set_margin_end(20)
         content.append(self._build_banner(model))
@@ -115,14 +122,33 @@ class OverviewWindow(Adw.ApplicationWindow):
 
         self._update_sensitivity()
         self.connect("close-request", self._on_close)
+        self._fit_to_screen(clamp)
         self._client.start()
+
+    def _fit_to_screen(self, content: Gtk.Widget) -> None:
+        """Open tall enough to show every control without scrolling, but never
+        taller than the screen (a 768-pixel laptop panel still gets a window
+        that fits, and scrolls)."""
+        _min, natural, _b, _b2 = content.measure(Gtk.Orientation.VERTICAL, _WIDTH)
+        wanted = natural + _HEADER_ALLOWANCE
+        display = Gdk.Display.get_default()
+        tallest = 0
+        if display is not None:
+            monitors = display.get_monitors()
+            for i in range(monitors.get_n_items()):
+                tallest = max(tallest, monitors.get_item(i).get_geometry().height)
+        if tallest:
+            # leave room for the desktop's own panels (top bar, dock, taskbar)
+            wanted = min(wanted, tallest - _PANEL_ALLOWANCE)
+        self.set_default_size(_WIDTH, max(wanted, 560))
 
     def _on_close(self, _window) -> bool:
         """Drop pending timers: both would touch widgets after teardown."""
-        for source in (self._brightness_source, self._resync_source):
+        for source in (self._brightness_source, self._resync_source,
+                       self._colour_source):
             if source:
                 GLib.source_remove(source)
-        self._brightness_source = self._resync_source = 0
+        self._brightness_source = self._resync_source = self._colour_source = 0
         self._curve_page.cancel_pending()
         return False  # let the close proceed
 
@@ -290,13 +316,10 @@ class OverviewWindow(Adw.ApplicationWindow):
         # The preview, wide, like the keyboard picture in the Windows app.
         self._preview = KeyboardPreview()
         self._preview.set_hexpand(True)
-        self._preview_caption = Gtk.Label(xalign=0.5)
-        self._preview_caption.add_css_class("metric-sub")
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.append(header)
         box.append(self._preview)
-        box.append(self._preview_caption)
         box.append(self._build_colour_grid())
         box.append(self._build_brightness())
         box.append(self._build_effects())
@@ -304,27 +327,51 @@ class OverviewWindow(Adw.ApplicationWindow):
         return box
 
     def _build_colour_grid(self) -> Gtk.Widget:
-        grid = Gtk.Grid(column_spacing=6, row_spacing=6,
-                        column_homogeneous=True, halign=Gtk.Align.FILL)
+        """Colour, all on one screen: the rainbow square (any colour, by click
+        or drag) with exact R/G/B boxes beneath it on the left, and the presets
+        in colour-wheel order on the right. No dialog to open."""
+        self._square = ColourSquare(self._on_square_pick)
+        self._controls.append(self._square)
+
+        self._rgb_spins: list[Gtk.SpinButton] = []
+        spins = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6,
+                        halign=Gtk.Align.START)
+        for letter, name in (("R", "Red"), ("G", "Green"), ("B", "Blue")):
+            label = Gtk.Label(label=letter)
+            label.add_css_class("metric-sub")
+            spin = Gtk.SpinButton.new_with_range(0, 255, 1)
+            spin.set_numeric(True)
+            spin.set_width_chars(3)
+            spin.update_property([Gtk.AccessibleProperty.LABEL], [f"{name} amount, 0 to 255"])
+            spin.set_tooltip_text(f"{name}, 0–255")
+            spin.connect("value-changed", self._on_rgb_spin)
+            spins.append(label)
+            spins.append(spin)
+            self._rgb_spins.append(spin)
+            self._controls.append(spin)
+
+        left = self._square
+
+        grid = Gtk.Grid(column_spacing=4, row_spacing=6, column_homogeneous=True,
+                        valign=Gtk.Align.START)
         self._swatches: list[tuple[Gtk.Button, palette.RGB]] = []
         for i, (name, rgb) in enumerate(palette.SWATCHES):
             button = self._build_swatch(name, rgb)
             grid.attach(button, i % palette.GRID_COLUMNS, i // palette.GRID_COLUMNS, 1, 1)
             self._swatches.append((button, rgb))
             self._controls.append(button)
+        presets_title = Gtk.Label(label="Presets", xalign=0.0)
+        presets_title.add_css_class("metric-sub")
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        right.append(presets_title)
+        right.append(grid)
+        spins.set_margin_top(4)
+        right.append(spins)
 
-        self._color_button = Gtk.ColorDialogButton(
-            dialog=Gtk.ColorDialog(title="Keyboard colour", with_alpha=False),
-            valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
-        self._color_button.set_tooltip_text("Pick any colour")
-        self._color_button.update_property([Gtk.AccessibleProperty.LABEL],
-                                           ["Pick any colour"])
-        self._color_button.connect("notify::rgba", self._on_custom_colour)
-        self._controls.append(self._color_button)
-        n = len(palette.SWATCHES)
-        grid.attach(self._color_button, n % palette.GRID_COLUMNS,
-                    n // palette.GRID_COLUMNS, 1, 1)
-        return grid
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=24)
+        row.append(left)
+        row.append(right)
+        return row
 
     def _build_brightness(self) -> Gtk.Widget:
         label = Gtk.Label(label="Brightness", xalign=0.0)
@@ -337,8 +384,6 @@ class OverviewWindow(Adw.ApplicationWindow):
         self._brightness.set_value_pos(Gtk.PositionType.RIGHT)
         self._brightness.set_format_value_func(lambda _s, v: f"{int(v)} %")
         self._brightness.set_hexpand(True)
-        for mark in (25, 50, 75):
-            self._brightness.add_mark(mark, Gtk.PositionType.BOTTOM, None)
         self._brightness.connect("value-changed", self._on_brightness_changed)
         self._brightness.update_property([Gtk.AccessibleProperty.LABEL], ["Brightness"])
         self._controls.append(self._brightness)
@@ -375,10 +420,8 @@ class OverviewWindow(Adw.ApplicationWindow):
             self._effect_buttons[effect.id] = button
             self._controls.append(button)
 
-        title = Gtk.Label(label="Effect", xalign=0.0)
-        title.add_css_class("row-label")
+        row.update_property([Gtk.AccessibleProperty.LABEL], ["Effect"])
         self._effects_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self._effects_box.append(title)
         self._effects_box.append(row)
         return self._effects_box
 
@@ -493,13 +536,41 @@ class OverviewWindow(Adw.ApplicationWindow):
             return
         self._apply_colour(rgb)
 
-    def _on_custom_colour(self, button: Gtk.ColorDialogButton, _param) -> None:
+    def _on_square_pick(self, rgb: palette.RGB, final: bool) -> None:
         if self._syncing:
             return
-        self._apply_colour(_rgb_from_rgba(button.get_rgba()))
+        self._queue_colour(rgb, now=final)
+
+    def _on_rgb_spin(self, _spin) -> None:
+        if self._syncing:
+            return
+        self._queue_colour(tuple(int(s.get_value()) for s in self._rgb_spins))
+
+    def _queue_colour(self, rgb: palette.RGB, *, now: bool = False) -> None:
+        """Show a colour at once, send it after a pause (or ``now``)."""
+        self._pending_colour = rgb
+        self._echo_colour(rgb)
+        if self._colour_source:
+            GLib.source_remove(self._colour_source)
+            self._colour_source = 0
+        if now:
+            self._send_colour()
+        else:
+            self._colour_source = GLib.timeout_add(_BRIGHTNESS_DEBOUNCE_MS,
+                                                   self._send_colour)
+
+    def _send_colour(self) -> bool:
+        self._colour_source = 0
+        pending, self._pending_colour = self._pending_colour, None
+        if pending is not None:
+            self._apply_colour(pending)
+        return GLib.SOURCE_REMOVE
 
     def _apply_colour(self, rgb: palette.RGB) -> None:
         self._client.set_keyboard_color(*rgb)
+        self._echo_colour(rgb)
+
+    def _echo_colour(self, rgb: palette.RGB) -> None:
         # Setting a colour also turns the backlight on daemon-side, so show that
         # here too instead of leaving the preview dark for a round-trip.
         was_syncing, self._syncing = self._syncing, True
@@ -603,8 +674,10 @@ class OverviewWindow(Adw.ApplicationWindow):
                     # reached the daemon yet
                     self._brightness.set_value(keyboard.brightness_pct)
                     self._brightness.set_draw_value(True)  # now it is real
-                self._select_swatch(keyboard.rgb)
-                self._echo_preview(keyboard.rgb)
+                if self._colour_source == 0:
+                    # mid-drag: don't yank the marker back to the old colour
+                    self._select_swatch(keyboard.rgb)
+                    self._echo_preview(keyboard.rgb)
         finally:
             self._syncing = False
 
@@ -650,13 +723,16 @@ class OverviewWindow(Adw.ApplicationWindow):
             # so a bool or the bare enum is rejected at runtime.
             button.update_state([Gtk.AccessibleState.PRESSED], [int(
                 Gtk.AccessibleTristate.TRUE if chosen else Gtk.AccessibleTristate.FALSE)])
+        self._shown_rgb = tuple(int(c) for c in rgb)
         was_syncing = self._syncing
-        self._syncing = True  # setting rgba re-enters _on_custom_colour
+        self._syncing = True  # setting a spin re-enters _on_rgb_spin
         try:
-            colour = Gdk.RGBA()
-            colour.red, colour.green, colour.blue = (c / 255 for c in rgb)
-            colour.alpha = 1.0
-            self._color_button.set_rgba(colour)
+            if colour_in_use:
+                self._square.show_colour(rgb)
+            else:
+                self._square.clear()  # cycle/heat pick their own colours
+            for spin, value in zip(self._rgb_spins, rgb):
+                spin.set_value(value)
         finally:
             self._syncing = was_syncing
 
@@ -677,7 +753,7 @@ class OverviewWindow(Adw.ApplicationWindow):
     def _echo_preview(self, rgb: palette.RGB | None = None) -> None:
         """Repaint the preview from what the widgets currently show."""
         if rgb is None:
-            rgb = _rgb_from_rgba(self._color_button.get_rgba())
+            rgb = self._shown_rgb
         effects = self._client.keyboard_effects()
         dimmed = self._client.keyboard_idle()
         self._preview.update(rgb, enabled=self._switch.get_active(),
@@ -685,18 +761,8 @@ class OverviewWindow(Adw.ApplicationWindow):
                              effect=effects.effect if effects else lighting.STATIC,
                              period_s=effects.period_s if effects else 0,
                              dimmed=dimmed)
-        if not self._switch.get_active():
-            caption = ""
-        elif dimmed:
-            caption = "Dark because nobody is typing — press any key"
-        elif effects and effects.idle_timeout_s:
-            caption = (f"Turns off after "
-                       f"{lighting.duration_text(effects.idle_timeout_s).lower()} "
-                       f"without typing")
-        else:
-            caption = ""
-        self._preview_caption.set_text(caption)
-        self._preview_caption.set_visible(bool(caption))
+        # Why the keys are dark is shown on the preview itself (its tooltip)
+        # and in the header line; the auto-off row says the timeout.
 
     # --- live updates --------------------------------------------------------
     def _on_telemetry(self, t: Telemetry) -> None:

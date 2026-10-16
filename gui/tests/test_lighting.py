@@ -117,5 +117,35 @@ def test_palette_has_plenty_of_unique_colours():
     assert len(set(values)) == len(values)  # every swatch is a distinct colour
 
 
-def test_palette_fills_the_grid_with_the_custom_button():
-    assert (len(palette.SWATCHES) + 1) % palette.GRID_COLUMNS == 0
+def test_palette_fills_the_grid_exactly():
+    assert len(palette.SWATCHES) % palette.GRID_COLUMNS == 0
+
+
+def _hue(rgb):
+    import colorsys
+    return colorsys.rgb_to_hsv(*(c / 255 for c in rgb))[0] * 360
+
+
+def test_vivid_presets_walk_the_colour_wheel_in_order():
+    """Red, orange, yellow, green, cyan, blue, purple, pink — never doubling
+    back (the complaint that prompted this test)."""
+    hues = [_hue(rgb) for _, rgb in palette.VIVID]
+    assert hues == sorted(hues)
+    assert all(s == 1.0 for s in (
+        __import__("colorsys").rgb_to_hsv(*(c / 255 for c in rgb))[1]
+        for _, rgb in palette.VIVID))
+
+
+def test_soft_row_runs_warm_to_white_to_cool():
+    names = [n for n, _ in palette.SOFT]
+    white = names.index("White")
+    warm = [(n, rgb) for n, rgb in palette.SOFT[:white]]
+    cool = [(n, rgb) for n, rgb in palette.SOFT[white + 1:]]
+    # warm side: from the red end (rose wraps just below 360) towards white
+    warm_hues = [(_hue(rgb) + 20) % 360 for _, rgb in warm]
+    assert warm_hues == sorted(warm_hues)
+    assert [_hue(rgb) for _, rgb in cool] == sorted(_hue(rgb) for _, rgb in cool)
+
+
+def test_vivid_rows_are_whole():
+    assert len(palette.VIVID) % palette.GRID_COLUMNS == 0
