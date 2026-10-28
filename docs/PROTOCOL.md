@@ -131,6 +131,16 @@ did not target is the one that moved, the mapping is reversed. If the expected
 register moved but the wrong fan audibly spun up, the register map is right and
 the physical labelling differs.
 
+**A data point from a G5 GE.** The owner of a G5 GE (BIOS FB06) ran the first
+half of that test with `tools/fan_check.py`
+([#36](https://github.com/smairio/gigactl/pull/36)). Driving fan 1 alone moved
+`0xCE` while `0xCF` stayed at 0; driving fan 2 alone moved `0xCF` while `0xCE`
+stayed at its firmware value. So on that machine the registers are not
+swapped: the command for fan *N* moves duty register *N*, and its tach. Which
+*physical* fan spun up was not recorded, so the second half of the test — is
+fan 1 really the fan that cools the CPU? — is still open for the G5 GE too. And
+it is a different model: it settles nothing for the G5 KF in #24.
+
 ### Does the fan command need four parameters?
 
 The same report describes the `0xC1` fan command as requiring `FBF1` set to a
@@ -142,6 +152,45 @@ unmodified build drives their fans — so the extra bytes may simply be inert
 padding copied from a driver that sets both fans in a single call. The EC
 ignores leftover scratch bytes, which would make both forms work and neither
 observation wrong. Untested here.
+
+The one-parameter form has also been reported working on a G5 GE
+([#36](https://github.com/smairio/gigactl/pull/36)): the duty byte alone drove
+each fan to the commanded 80 % — its duty register reached the target and its
+RPM rose — and the handback returned it to the firmware.
+
+### Reports from other machines
+
+Results from machines nobody here owns, as their owners reported them. They are
+evidence about those machines, not findings: nothing in the tables above, and
+no code, changes because of them.
+
+#### Gigabyte G5 GE (BIOS FB06, Fedora 44), 26 October 2026 — [#36](https://github.com/smairio/gigactl/pull/36)
+
+Measured by the owner with the scripts in `tools/`. That kernel has no `ec_sys`
+module, so every EC access went through `/dev/port`. The probe output is kept
+in [`docs/probe/g5-ge-fb06.txt`](probe/g5-ge-fb06.txt).
+
+- **Reading.** At idle the EC reported the CPU at 43 °C, matching coretemp,
+  fan 1 at 27 % duty and about 2,372 RPM, and fan 2 stopped. Three samples
+  agreed.
+- **One fan at a time.** `tools/fan_check.py` drove each fan alone to 80 % for
+  five seconds. Fan 1: `DUT1` 27 % → 80 % and about 2,372 → 4,991 RPM, while
+  `DUT2` stayed at 0 %; after the handback the firmware brought it back to
+  about 30 %. Fan 2: `DUT2` 0 % → 80 % and 0 → about 4,637 RPM, with fan 1
+  untouched; back to 0 % after the handback. What this does and does not settle
+  is written under the two questions above.
+- **The daemon's own loop.** `tools/daemon_smoke.py` ran the daemon's tick with
+  the `performance` profile for four ticks. Both fans went from firmware idle
+  (27 % / 0 %) to the curve's duty (43 % / 41 %, about 3,360 / 3,100 RPM) with
+  no engine fault, and were then handed back to the firmware.
+- **Stopping the daemon.** With both fans held at 100 % through the daemon,
+  `systemctl stop gigactl` gave them back to the firmware: a read a few seconds
+  later showed fan 1 at its idle duty (27 %, about 2,372 RPM) and fan 2
+  stopped.
+- **Keyboard.** `tools/keyboard_check.py` sent the master enable (`0xC4`), then
+  colours (`0xCA`). The keys turned orange at full brightness and then back to
+  the factory blue. Both colours came out as intended, which is what the B,R,G
+  byte order documented above predicts.
 
 ## Dead ends (so you don't repeat them)
 

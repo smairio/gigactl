@@ -24,6 +24,7 @@ serialising on the same lock the daemon uses. And when they *cannot tell* — no
 | Gigabyte **G6 KF** (i7-13620H / RTX 4060) | ✅ Verified — built and measured on this machine |
 | Gigabyte **G5 KF** | 👍 Reported working by a user ([#24](https://github.com/smairio/gigactl/issues/24)) |
 | Gigabyte **G5 MF5** | 👍 Reported working by a user ([#25](https://github.com/smairio/gigactl/issues/25)) |
+| Gigabyte **G5 GE** (i5-12500H / RTX 3050) | 👍 Reported working by a user — measured with the scripts in `tools/` ([#36](https://github.com/smairio/gigactl/pull/36)) |
 | Other Gigabyte G5 / G6 / G7 (same Clevo platform) | 🟢 Expected to work — untested, please report! |
 | Any other Gigabyte laptop | ❌ Refused by the built-in model guard |
 
@@ -32,6 +33,9 @@ measured here. 👍 means somebody else ran it on their own machine and said it
 worked — real evidence, and the only kind obtainable for hardware nobody here
 owns, but not a substitute for having tested it. Nothing outside the G6 KF has
 been verified by the maintainer, and the table will never say otherwise.
+
+Own a G5, G6 or G7 that the table does not list? [tools/README.md](tools/README.md)
+shows how to check it and what to send.
 
 There is a second report on the G5 MF5 that looked like a hardware failure and
 was not: the kernel's EC interface had been loaded read-only, so every reading

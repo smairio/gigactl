@@ -1,0 +1,154 @@
+== identity ==
+date: 2026-10-26T08:57:06+07:00
+kernel: 7.2.11-200.fc44.x86_64
+uid: 0
+dmi.sys_vendor: GIGABYTE
+dmi.product_name: G5 GE
+dmi.product_version: Not Applicable
+dmi.bios_version: FB06
+dmi.bios_date: 02/11/2026
+dmi.board_name: G5 GE
+# dmidecode 3.7
+Getting SMBIOS data from sysfs.
+SMBIOS 3.3 present.
+
+Handle 0x0001, DMI type 1, 27 bytes
+System Information
+	Manufacturer: GIGABYTE
+	Product Name: G5 GE
+	Version: Not Applicable
+	Serial Number: <redacted>
+	UUID: <redacted>
+	Wake-up Type: Power Switch
+	SKU Number: RC55GE
+	Family: GIGABYTE
+
+Handle 0x001C, DMI type 12, 5 bytes
+System Configuration Options
+	Option 1: ConfigOptions1
+	Option 2: ConfigOptions2
+	Option 3: ConfigOptions3
+
+== modules ==
+wmi                    40960  2 video,mxm_wmi
+ec_sys.write_support: <unreadable>
+
+== sysfs surfaces ==
+hwmon0
+hwmon1
+hwmon2
+hwmon3
+hwmon4
+hwmon5
+hwmon6
+hwmon /sys/class/hwmon/hwmon0: AC
+hwmon /sys/class/hwmon/hwmon1: acpitz
+hwmon /sys/class/hwmon/hwmon2: BAT0
+hwmon /sys/class/hwmon/hwmon3: nvme
+hwmon /sys/class/hwmon/hwmon4: nvme
+hwmon /sys/class/hwmon/hwmon5: coretemp
+hwmon /sys/class/hwmon/hwmon6: iwlwifi_1
+<no platform_profile>
+intel-rapl
+intel-rapl:0
+intel-rapl:0:0
+intel-rapl:0:1
+intel-rapl:1
+intel-rapl-mmio
+intel-rapl-mmio:0
+/sys/class/powercap/intel-rapl:0/constraint_0_name: long_term
+/sys/class/powercap/intel-rapl:0/constraint_1_name: short_term
+/sys/class/powercap/intel-rapl:0/constraint_2_name: peak_power
+/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw: 45000000
+/sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw: 115000000
+/sys/class/powercap/intel-rapl:0/constraint_2_power_limit_uw: 150000000
+/sys/class/powercap/intel-rapl:0/constraint_0_max_power_uw: 45000000
+/sys/class/powercap/intel-rapl:0/constraint_1_max_power_uw: 0
+/sys/class/powercap/intel-rapl:0/constraint_2_max_power_uw: 0
+AC
+BAT0
+battery /sys/class/power_supply/BAT0
+  <no charge_control_* files>
+
+== sensors (read-only) ==
+iwlwifi_1-virtual-0
+Adapter: Virtual device
+temp1:        +42.0°C
+
+nvme-pci-0300
+Adapter: PCI adapter
+Composite:    +43.9°C  (low  =  -0.1°C, high = +99.8°C)
+                       (crit = +109.8°C)
+
+BAT0-acpi-0
+Adapter: ACPI interface
+in0:          16.07 V
+curr1:         0.00 A
+
+coretemp-isa-0000
+Adapter: ISA adapter
+Package id 0:  +43.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 0:        +41.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 4:        +39.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 8:        +38.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 12:       +40.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 16:       +39.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 17:       +39.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 18:       +39.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 19:       +39.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 20:       +38.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 21:       +38.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 22:       +38.0°C  (high = +100.0°C, crit = +100.0°C)
+Core 23:       +38.0°C  (high = +100.0°C, crit = +100.0°C)
+
+nvme-pci-0200
+Adapter: PCI adapter
+Composite:    +33.9°C  (low  = -60.1°C, high = +89.8°C)
+                       (crit = +94.8°C)
+
+acpitz-acpi-0
+Adapter: ACPI interface
+temp1:        +43.0°C
+
+
+== nvidia (read-only) ==
+name, power.default_limit [W], power.min_limit [W], power.max_limit [W], temperature.gpu
+NVIDIA GeForce RTX 3050 Laptop GPU, 60.00 W, 1.00 W, 75.00 W, 42
+        Average Power Draw                             : 0.00 W
+        Instantaneous Power Draw                       : 749.67 W
+        GPU Ceiling Power Limit
+            Current Power Limit                        : 60.00 W
+            Requested Power Limit                      : 60.00 W
+            Default Power Limit                        : 60.00 W
+        Min Power Limit                                : 1.00 W
+        Max Power Limit                                : 75.00 W
+        Average Power Draw                             : N/A
+        Instantaneous Power Draw                       : N/A
+        Average Power Draw                             : N/A
+        Instantaneous Power Draw                       : N/A
+        Current Power Limit                            : N/A
+        Requested Power Limit                          : N/A
+        Default Power Limit                            : N/A
+
+== upower (read-only) ==
+    rechargeable:        yes
+    state:               fully-charged
+    energy:              29.3216 Wh
+    energy-empty:        0 Wh
+    energy-full:         29.3216 Wh
+    energy-full-design:  52.514 Wh
+    energy-rate:         0 W
+    charge-cycles:       N/A
+    percentage:          100%
+    icon-name:          'battery-full-charged-symbolic'
+    1792979825	16.074	fully-charged
+    1792979735	16.072	fully-charged
+
+== ec registers (root only, read-only) ==
+</sys/kernel/debug/ec/ec0/io not readable: ec_sys debugfs unavailable on this kernel>
+sample 0: cpu=43C gpu=40/38C dut1=71 dut2=0 rpm1~2372 rpm2~0
+sample 1: cpu=43C gpu=40/38C dut1=71 dut2=0 rpm1~2372 rpm2~0
+sample 2: cpu=43C gpu=40/38C dut1=71 dut2=0 rpm1~2372 rpm2~0
+
+== done ==
+probe complete (no writes were performed)
