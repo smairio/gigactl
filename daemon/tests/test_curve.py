@@ -222,3 +222,15 @@ def test_a_new_profile_or_curve_starts_from_the_current_reading_alone(choose, du
     _duty_after_each(e, curve.CPU_FAN, [60, 60, 60])
     choose(e)
     assert e.decide(curve.CPU_FAN, 80) == duty_at_80
+
+
+def test_a_burst_right_after_a_profile_change_is_ignored_too():
+    """A new profile is applied from one fresh reading. The burst filter must
+    not be weaker in the seconds after that — or after the daemon starts — than
+    at any other time, so the first reading stands in for the history (#33).
+    Readings: the G6 KF burst again, starting at the moment of the change."""
+    e = curve.ProfileEngine()
+    e.set_profile("performance")
+    first = e.decide(curve.CPU_FAN, 51)
+    later = [e.decide(curve.CPU_FAN, t) for t in (63, 80, 53, 52)]
+    assert first == 51 and later == [None, None, None, None]

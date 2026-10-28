@@ -183,9 +183,10 @@ class ProfileEngine:
         """Duty% to apply to ``fan`` given its source temp, or None to leave it.
 
         Below the floor temperature the curve reads a smoothed temperature: the
-        lower median of the fan's last five readings (fewer just after a reset;
-        one is used as it is, of two the lower). A change must show in three of
-        five ticks to move the curve. Three, because the EC's CPU register lags
+        lower median of the fan's last five readings. Just after a reset the
+        first reading stands in for all five, so the filter is as strong in the
+        seconds after a profile change or a daemon start as at any other time.
+        A change must show in three of five ticks to move the curve. Three, because the EC's CPU register lags
         and holds a short burst, so two ticks in a row can see one (#33). At or
         above the floor temperature the curve takes the live reading at once.
 
@@ -200,7 +201,10 @@ class ProfileEngine:
         if cpu_temp is None:
             cpu_temp = source_temp
         window = self._recent[fan]
-        window.append(source_temp)
+        if window:
+            window.append(source_temp)
+        else:  # just reset: the first reading stands in for the history
+            window.extend([source_temp] * SMOOTHING_READINGS)
         if source_temp >= self.floor_temp:  # hot: no smoothing, react at once
             curve_temp = source_temp
         else:
