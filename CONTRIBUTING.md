@@ -21,6 +21,7 @@ python3 -m pytest packaging -q        # debian/, man pages, docs and workflows
 python3 -m pytest cli -q              # gfan and gkbd, with stub busctl and ec_probe
 (cd daemon && python3 -m pytest -q)   # the daemon, with a fake EC
 (cd gui && python3 -m pytest -q)      # the app's logic; no display needed
+python3 -m pytest tools -q            # the owner tools, with a fake bus and fake DMI
 desktop-file-validate gui/data/*.desktop
 for f in gfan gkbd gigactl-cli-lib.sh install.sh; do bash -n "$f"; done
 ```

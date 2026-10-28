@@ -110,6 +110,8 @@ body:
         4. Run `gfan status`. Its "Fan1" line reads register `0xCE`, and its "Fan2" line reads register `0xCF`.
         5. When you are done, run `gfan auto` again, or choose your usual profile in the app.
 
+        If step 2 says the fans "did not accept the duty", that is a useful answer too: the daemon reads the register back, and on a model where they are the other way round it gives the fans back to the firmware at once. To see both registers move, use the fuller check in [tools/README.md](https://github.com/smairio/gigactl/blob/master/tools/README.md), which stops the daemon first.
+
   - type: textarea
     id: one-fan-status
     attributes:
