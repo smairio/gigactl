@@ -54,7 +54,10 @@ is the one control where mouse-only would lock people out entirely.
 safety floor and its monotonic rules. That is deliberate: the two packages
 install separately, so this is a wire contract rather than shared code. It exists
 so the editor cannot show a shape or a predicted duty that the daemon would
-quietly rewrite — change the two together.
+quietly rewrite — change the two together. The daemon's smoothing over time is
+deliberately not mirrored: below 85 °C it follows the middle of its last five
+readings, so it may reach the duty the editor predicts for a steady temperature
+a few seconds later.
 
 ## How the controls stay honest
 

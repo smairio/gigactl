@@ -1,7 +1,8 @@
 """Fan curve model and the automatic profile engine.
 
 A curve is 5 monotonic ``(temp_celsius, duty_percent)`` points. The engine maps
-a fan's source temperature to a duty each tick, with hysteresis (don't react to
+a fan's source temperature to a duty each tick, with smoothing below the floor
+temperature (a short spike doesn't move the curve), hysteresis (don't react to
 tiny wiggles) and a safety floor (never idle a fan while its component is hot).
 
 Everything here is pure: it reads no hardware and holds no D-Bus. The daemon
@@ -9,6 +10,7 @@ feeds it temperatures and applies the duties it returns.
 """
 from __future__ import annotations
 
+from collections import deque
 from typing import Optional
 
 CPU_FAN = 1
@@ -17,6 +19,7 @@ FANS = (CPU_FAN, GPU_FAN)
 
 POINTS = 5
 HYSTERESIS_C = 4
+SMOOTHING_READINGS = 5  # below the floor temp, the curve follows their median
 FLOOR_PCT = 30
 FLOOR_TEMP_C = 85
 
@@ -93,8 +96,9 @@ def normalize(points: list[Point]) -> Curve:
 
 
 class ProfileEngine:
-    """Holds the active profile and per-fan hysteresis state; turns a source
-    temperature into the duty to apply (or ``None`` to leave the fan alone)."""
+    """Holds the active profile and per-fan smoothing and hysteresis state;
+    turns a source temperature into the duty to apply (or ``None`` to leave the
+    fan alone)."""
 
     def __init__(self, hysteresis: int = HYSTERESIS_C,
                  floor_pct: int = FLOOR_PCT, floor_temp: int = FLOOR_TEMP_C) -> None:
@@ -106,10 +110,15 @@ class ProfileEngine:
         self._curves: dict[int, Curve] = {}
         self._last_temp: dict[int, Optional[int]] = {}
         self._last_duty: dict[int, Optional[int]] = {}
+        self._recent: dict[int, deque[int]] = {
+            f: deque(maxlen=SMOOTHING_READINGS) for f in FANS}
 
     def _reset_state(self) -> None:
         self._last_temp = {f: None for f in FANS}
         self._last_duty = {f: None for f in FANS}
+        # readings taken under the old choice must not hold back the new one:
+        # the daemon applies a choice at once, from a single fresh reading
+        self._recent = {f: deque(maxlen=SMOOTHING_READINGS) for f in FANS}
 
     def set_profile(self, name: str) -> None:
         if name == FIRMWARE:
@@ -173,23 +182,37 @@ class ProfileEngine:
                cpu_temp: Optional[int] = None) -> Optional[int]:
         """Duty% to apply to ``fan`` given its source temp, or None to leave it.
 
-        Hysteresis governs only the *curve* target (held across sub-4 °C moves).
-        The safety floor is evaluated every tick regardless, and engages when
-        either the fan's own component or the CPU is hot — so a fan can never
-        sit below the floor while something is hot, even mid-hysteresis.
+        Below the floor temperature the curve reads a smoothed temperature: the
+        lower median of the fan's last five readings (fewer just after a reset;
+        one is used as it is, of two the lower). A change must show in three of
+        five ticks to move the curve. Three, because the EC's CPU register lags
+        and holds a short burst, so two ticks in a row can see one (#33). At or
+        above the floor temperature the curve takes the live reading at once.
+
+        Hysteresis governs only the *curve* target (held across sub-4 °C moves
+        of that curve temperature). The safety floor is evaluated every tick
+        regardless, on the *live* readings, and engages when either the fan's
+        own component or the CPU is hot — so a fan can never sit below the
+        floor while something is hot, even mid-hysteresis or mid-smoothing.
         """
         if self.profile in (FIRMWARE, MANUAL):
             return None
         if cpu_temp is None:
             cpu_temp = source_temp
+        window = self._recent[fan]
+        window.append(source_temp)
+        if source_temp >= self.floor_temp:  # hot: no smoothing, react at once
+            curve_temp = source_temp
+        else:
+            curve_temp = sorted(window)[(len(window) - 1) // 2]  # lower median
         last_t = self._last_temp.get(fan)
         last_d = self._last_duty.get(fan)
 
-        if last_t is None or abs(source_temp - last_t) >= self.hysteresis:
-            curve_target = duty_for(self._curves[fan], source_temp)
-            self._last_temp[fan] = source_temp
+        if last_t is None or abs(curve_temp - last_t) >= self.hysteresis:
+            curve_target = duty_for(self._curves[fan], curve_temp)
+            self._last_temp[fan] = curve_temp
         else:  # small move: hold the curve target we last settled on
-            curve_target = last_d if last_d is not None else duty_for(self._curves[fan], source_temp)
+            curve_target = last_d if last_d is not None else duty_for(self._curves[fan], curve_temp)
 
         target = apply_floor(curve_target, max(source_temp, cpu_temp),
                              self.floor_pct, self.floor_temp)
