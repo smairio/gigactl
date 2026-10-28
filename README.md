@@ -49,14 +49,16 @@ sudo apt install ./gigactl_1.0.0_amd64.deb
 ```
 
 One `.deb` installs everything: the **GigaControl** desktop app, the `gigactld`
-daemon that owns EC access, and both CLI tools. The daemon starts immediately and
+daemon that owns EC access, and both CLI tools. On Intel machines the app also
+has a CPU turbo boost switch: off keeps the CPU cooler and quieter, but slower in
+short bursts. The daemon starts immediately and
 at every boot; the app appears in your app grid and keeps a tray icon from the
 next login. Installation is refused on hardware outside the Gigabyte G5/G6/G7
 range (override with `GIGACTL_FORCE_INSTALL=1`).
 
 `sudo apt remove gigactl` stops the daemon and hands the fans back to the
-firmware curve; `sudo apt purge gigactl` also drops the saved profile, curves and
-keyboard colour.
+firmware curve; `sudo apt purge gigactl` also drops the saved profile, curves,
+keyboard colour and turbo boost choice.
 
 To build it yourself:
 

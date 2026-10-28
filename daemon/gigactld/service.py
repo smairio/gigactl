@@ -15,7 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
 from . import __version__  # noqa: E402
-from . import authz, curve, ec as ec_mod, fans, keyboard, mailbox, state  # noqa: E402
+from . import authz, curve, ec as ec_mod, fans, keyboard, mailbox, state, turbo  # noqa: E402
 from .telemetry import read_telemetry  # noqa: E402
 
 _ERR = "io.github.smairio.gigactl.Error"
@@ -64,6 +64,9 @@ INTROSPECTION_XML = f"""
     <method name="SetKeyboardEnabled">
       <arg name="on" type="b" direction="in"/>
     </method>
+    <method name="SetTurboBoost">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
     <signal name="Telemetry">
       <arg name="cpu_temp"  type="u"/>
       <arg name="gpu_temp"  type="u"/>
@@ -91,6 +94,11 @@ INTROSPECTION_XML = f"""
     <!-- (linked, cpu_points, gpu_points) — the shape the curve editor loads.
          Empty point lists mean the engine is driving nothing (firmware/manual). -->
     <property name="Curves" type="(ba(uu)a(uu))" access="read"/>
+    <!-- Live intel_pstate state: TurboBoost reads the sysfs knob every
+         time (tuned/PowerDevil can move it behind us); TurboAvailable is
+         False where the knob does not exist at all. -->
+    <property name="TurboBoost" type="b" access="read"/>
+    <property name="TurboAvailable" type="b" access="read"/>
   </interface>
 </node>
 """
@@ -134,6 +142,13 @@ class Daemon:
         # it's None the daemon writes no keyboard section and re-applies nothing,
         # so a fan-only user's backlight is never touched.
         self.keyboard: keyboard.KeyboardState | None = None
+        self.turbo = turbo.TurboControl()
+        # The turbo choice the user made through us (None = never): only a
+        # made choice is persisted and re-applied at boot, so a machine
+        # managed by tuned/systemd alone is never fought by the daemon.
+        self._turbo_choice: bool | None = None
+        # (available, enabled) as last announced; see _sync_turbo.
+        self._last_turbo: tuple[bool, bool] | None = None
         self.state_path = state.DEFAULT_PATH
         # Why the engine's last attempt to drive the fans came to nothing, and
         # the status last announced — kept so a condition repeating every two
@@ -211,6 +226,14 @@ class Daemon:
         if kd:
             self.keyboard = keyboard.KeyboardState.from_dict(kd)
             self._apply_keyboard("boot")
+        # Turbo likewise: only re-apply a choice made through the daemon.
+        if "turbo_enabled" in data:
+            self._turbo_choice = bool(data["turbo_enabled"])
+            try:
+                self.turbo.set_enabled(self._turbo_choice)
+                print(f"gigactld: turbo {'enabled' if self._turbo_choice else 'disabled'} (restored)", flush=True)
+            except Exception as exc:
+                print(f"gigactld: could not restore turbo choice: {exc}", flush=True)
 
     def _apply_keyboard(self, why: str) -> None:
         """Re-drive the backlight to the remembered state, if the user has set
@@ -282,6 +305,10 @@ class Daemon:
             return _keyboard_variant(self.keyboard)
         if prop == "Curves":
             return _curves_variant(self.engine)
+        if prop == "TurboAvailable":
+            return GLib.Variant("b", self.turbo.state()[0])
+        if prop == "TurboBoost":
+            return GLib.Variant("b", self.turbo.state()[1])
         return None
 
     def ec_status(self) -> str:
@@ -352,6 +379,8 @@ class Daemon:
                 self._set_keyboard_brightness(sender, params, invocation)
             elif method == "SetKeyboardEnabled":
                 self._set_keyboard_enabled(sender, params, invocation)
+            elif method == "SetTurboBoost":
+                self._set_turbo_boost(sender, params, invocation)
             else:
                 invocation.return_dbus_error(f"{_ERR}.UnknownMethod", method)
         except ec_mod.EcNotWritable as exc:
@@ -459,6 +488,7 @@ class Daemon:
                 # keep trying every tick until the EC takes the fans back.
                 self._failsafe_restored = self._try_restore_fans()
             self._engine_fault = self._failsafe_status(reached)
+        self._sync_turbo()
         self._sync_ec_status()
         return True  # keep the timeout running
 
@@ -516,6 +546,19 @@ class Daemon:
             return _FAILSAFE_PENDING
         return None if reached else _FAILSAFE_LANDED
 
+    def _sync_turbo(self) -> None:
+        """Announce the live turbo state. The knob has other writers —
+        power-profiles-daemon turns turbo off in Power Saver — and clients
+        read a cached copy of the property, so without this the switch in the
+        window would keep showing whatever it saw last."""
+        current = self.turbo.state()
+        if current == self._last_turbo:
+            return  # unchanged: re-announcing would wake every client for nothing
+        self._last_turbo = current
+        self._notify_properties(
+            TurboAvailable=GLib.Variant("b", current[0]),
+            TurboBoost=GLib.Variant("b", current[1]))
+
     def _run_engine(self, cpu_temp: int, gpu_temp: int, *,
                     quiet: bool = False) -> None:
         """Drive each fan the engine has an opinion about.
@@ -550,7 +593,7 @@ class Daemon:
 
     def _persist(self) -> None:
         try:
-            data = state.snapshot(self.engine, self.keyboard)
+            data = state.snapshot(self.engine, self.keyboard, self._turbo_choice)
             if self._before_trip:  # a trip is not the user's choice; keep theirs
                 data.update(self._before_trip)
             state.save(self.state_path, data)
@@ -595,6 +638,22 @@ class Daemon:
         self._apply_now()
         self._persist()
         self._notify_fan_state()
+        invocation.return_value(None)
+
+    # --- CPU methods ---------------------------------------------------------
+    def _set_turbo_boost(self, sender, params, invocation) -> None:
+        (enabled,) = params.unpack()
+        if not self._authorized(sender, invocation,
+                                authz.ACTION_CONTROL_CPU, "the CPU turbo"):
+            return
+        try:
+            self.turbo.set_enabled(enabled)
+        except turbo.TurboUnavailable as exc:
+            invocation.return_dbus_error(f"{_ERR}.TurboUnavailable", str(exc))
+            return
+        self._turbo_choice = enabled
+        self._persist()
+        self._sync_turbo()  # announce what the knob says now, not what was asked
         invocation.return_value(None)
 
     # --- keyboard methods ----------------------------------------------------

@@ -25,6 +25,7 @@ follow the system automatically (libadwaita).
 - `temperature.py` — the one semantic colour scale (cool/warm/hot) + gauge math.
 - `backlight.py` — how brightly the keyboard preview should glow.
 - `palette.py` — keyboard swatches, drawn in the exact RGB they send.
+- `turbo.py` — whether the CPU turbo row shows, and whether it can be used.
 - `profiles.py` — the profile row's metadata; names `custom`/`manual` honestly.
 - `curves.py` — curve maths: prediction (incl. the daemon's floor), monotonic
   dragging, and the graph↔value mapping.
@@ -69,7 +70,8 @@ exits (hence `_last_profile`).
 
 ```sh
 python3 -m pytest -q   # pure logic: model, temperature, palette, profiles,
-                       # error wording, telemetry/keyboard parsing, glow
+                       # error wording, telemetry/keyboard parsing, glow,
+                       # the turbo row
 ```
 
 The GTK widgets are verified by driving the real handlers against a live daemon

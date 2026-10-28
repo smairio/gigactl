@@ -29,7 +29,8 @@ Single resizable window, **two screens**, no persistent tab bar:
 1. **Model-verification banner** — green "detected · fully verified" for G6 KF; amber "expected to work" for other G5/G6; red "unsupported" blocks controls. Honesty is non-negotiable (PRODUCT.md principle 3).
 2. **Live-state hero** — CPU + GPU semantic ring gauges (big tabular number) beside a status pill and per-fan RPM + duty. Answers "is my laptop OK?" at a glance.
 3. **Fan profile row** — one-click segments: Quiet · Balanced · Performance · Max · Firmware · Custom…. Active profile filled with accent (Firmware fills neutral gray — it is the yield-to-hardware state). `Custom…` opens screen 2.
-4. **Keyboard light** — color swatches (+ custom wheel), brightness slider, and the live glowing preview.
+4. **CPU turbo boost** — one switch with a short hint: what off does (cooler and quieter, slower in bursts) and that the system power mode changes it too. Shown only where the daemon reports the intel_pstate switch exists; it mirrors the live value, because the system power mode writes it too.
+5. **Keyboard light** — color swatches (+ custom wheel), brightness slider, and the live glowing preview.
 
 **2. Custom curve** — reached from `Custom…`, returns via "‹ Back to overview":
 - Large temp→fan-speed graph, editable points (drag), Linked ⇄ Split segmented toggle.

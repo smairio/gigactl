@@ -15,6 +15,7 @@ from gi.repository import Gio, GLib  # noqa: E402
 
 ACTION_CONTROL_FANS = "io.github.smairio.gigactl.control-fans"
 ACTION_CONTROL_KEYBOARD = "io.github.smairio.gigactl.control-keyboard"
+ACTION_CONTROL_CPU = "io.github.smairio.gigactl.control-cpu"
 
 _PK_NAME = "org.freedesktop.PolicyKit1"
 _PK_PATH = "/org/freedesktop/PolicyKit1/Authority"

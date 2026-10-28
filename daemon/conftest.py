@@ -97,8 +97,10 @@ class Invocation:
 @pytest.fixture
 def make_daemon(tmp_path):
     """Factory for a Daemon wired to fakes. ``connected=False`` leaves ``_conn``
-    unset, which is the pre-bus state. State persists under ``tmp_path`` so a
-    test never reads or writes the real /var/lib/gigactl/state.json."""
+    unset, which is the pre-bus state. State and the turbo knob live under
+    ``tmp_path`` so a test never touches the real /var/lib/gigactl/state.json or
+    /sys/devices/system/cpu/intel_pstate/no_turbo."""
+    from gigactld import turbo
     from gigactld.service import Daemon
 
     count = 0
@@ -108,6 +110,10 @@ def make_daemon(tmp_path):
         count += 1
         daemon = Daemon(FakeEc(), authorizer=AllowAllAuthorizer())
         daemon.state_path = str(tmp_path / f"state{count}.json")
+        # Never the real intel_pstate knob: a test run as root would otherwise
+        # change the CPU's turbo setting. Absent by default (no turbo switch);
+        # a test that wants one writes this file or swaps in its own.
+        daemon.turbo = turbo.TurboControl(str(tmp_path / f"no_turbo{count}"))
         if connected:
             daemon._conn = RecordingConn()
         return daemon

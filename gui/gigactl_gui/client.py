@@ -194,7 +194,20 @@ class DaemonClient:
             print(f"gigactl-gui: bad KeyboardState property: {exc}", flush=True)
             return None
 
+    def turbo_state(self) -> tuple[bool, bool] | None:
+        """(available, enabled) from the daemon's live properties."""
+        if not self._proxy:
+            return None
+        avail = self._proxy.get_cached_property("TurboAvailable")
+        enabled = self._proxy.get_cached_property("TurboBoost")
+        if avail is None or enabled is None:
+            return None
+        return (avail.get_boolean(), enabled.get_boolean())
+
     # --- control calls -------------------------------------------------------
+    def set_turbo_boost(self, enabled: bool) -> None:
+        self._call("SetTurboBoost", GLib.Variant("(b)", (enabled,)))
+
     def set_profile(self, name: str) -> None:
         self._call("SetProfile", GLib.Variant("(s)", (name,)))
 

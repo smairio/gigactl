@@ -10,7 +10,7 @@ from . import curve
 DEFAULT_PATH = "/var/lib/gigactl/state.json"
 
 
-def snapshot(engine, kbd=None) -> dict:
+def snapshot(engine, kbd=None, turbo_enabled=None) -> dict:
     """Serialise the fan profile, plus the keyboard state when one is given.
     The keyboard rides in the same file so both restore from one atomic write;
     each domain owns its own dict shape (``kbd.to_dict()``) so this module never
@@ -23,6 +23,8 @@ def snapshot(engine, kbd=None) -> dict:
     }
     if kbd is not None:
         data["keyboard"] = kbd.to_dict()
+    if turbo_enabled is not None:
+        data["turbo_enabled"] = turbo_enabled
     return data
 
 

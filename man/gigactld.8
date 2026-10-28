@@ -26,9 +26,17 @@ current temperature. It also remembers the fan profile, the custom curves and th
 keyboard colour and brightness, re\-applying them at boot and after resume from
 suspend.
 .PP
+On Intel machines it can also allow or forbid CPU turbo boost, through the
+intel_pstate
+.I no_turbo
+switch. That switch has other writers \(em the desktop's power mode turns turbo
+off in power saver \(em so the daemon reports its live value and re\-applies its
+own saved choice only at start, never on a timer, and only if the user made one.
+.PP
 Every write is authorised through polkit before it happens, using the caller's
 bus name as the subject. The shipped policy allows the user of the active local
-session to control the fans and backlight without a password, and requires
+session to control the fans, the backlight and CPU turbo boost without a
+password, and requires
 administrator authentication otherwise \(em which means a remote session such as
 SSH has no polkit agent to satisfy, and should run its client as root instead.
 .PP
@@ -77,17 +85,20 @@ Methods:
 .BR SetProfile ,
 .BR SetCurve ,
 .BR SetKeyboardColor ,
-.B SetKeyboardBrightness
+.BR SetKeyboardBrightness ,
+.B SetKeyboardEnabled
 and
-.BR SetKeyboardEnabled .
+.BR SetTurboBoost .
 Properties:
 .BR DaemonVersion ,
 .BR EcStatus ,
 .BR ActiveProfile ,
 .BR Telemetry ,
-.B KeyboardState
+.BR KeyboardState ,
+.BR Curves ,
+.B TurboBoost
 and
-.BR Curves .
+.BR TurboAvailable .
 Reading is unrestricted; every method is gated by polkit.
 .PP
 .RS
@@ -98,7 +109,8 @@ busctl introspect io.github.smairio.gigactl /io/github/smairio/gigactl
 .SH FILES
 .TP
 .I /var/lib/gigactl/state.json
-The saved fan profile, custom curves and keyboard state, restored at startup.
+The saved fan profile, custom curves, keyboard state and turbo boost choice
+(only if the user made one), restored at startup.
 Removed when the package is purged.
 .TP
 .I /usr/lib/systemd/system/gigactl.service
@@ -110,9 +122,10 @@ polkit decides inside the daemon.
 .TP
 .I /usr/share/polkit-1/actions/io.github.smairio.gigactl.policy
 The
-.B control-fans
-and
+.BR control-fans ,
 .B control-keyboard
+and
+.B control-cpu
 actions and their defaults.
 .TP
 .I /run/lock/gigactl-ec.lock

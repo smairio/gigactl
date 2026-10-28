@@ -108,3 +108,15 @@ def test_a_blocked_ec_reaches_the_user_with_the_daemon_s_own_instruction():
     message = errors.human_message(raw)
     assert "modprobe" in message
     assert message != errors._GENERIC
+
+
+def test_a_refused_turbo_change_reaches_the_user_with_the_daemon_s_reason():
+    """Like the blocked EC: the daemon already says why turbo cannot change
+    (switched off in the BIOS, or no switch at all), and that reason is the
+    useful part — a generic apology would hide it."""
+    raw = ("GDBus.Error:io.github.smairio.gigactl.Error.TurboUnavailable: "
+           "turbo boost is switched off in the BIOS, or this CPU does not "
+           "support it")
+    message = errors.human_message(raw)
+    assert "BIOS" in message
+    assert message != errors._GENERIC

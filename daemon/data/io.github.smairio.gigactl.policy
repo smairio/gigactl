@@ -19,6 +19,16 @@
     </defaults>
   </action>
 
+  <action id="io.github.smairio.gigactl.control-cpu">
+    <description>Control CPU turbo boost</description>
+    <message>Authentication is required to change CPU turbo boost</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
   <action id="io.github.smairio.gigactl.control-keyboard">
     <description>Control the keyboard backlight</description>
     <message>Authentication is required to control the keyboard backlight</message>
