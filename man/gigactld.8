@@ -26,6 +26,13 @@ current temperature. It also remembers the fan profile, the custom curves and th
 keyboard colour and brightness, re\-applying them at boot and after resume from
 suspend.
 .PP
+Below 85 \(deC the curve follows the middle value of each fan's last five
+readings (about ten seconds at the default interval), so a short spike does not
+move the fans. At 85 \(deC and above it reacts to every reading at once. A newly
+chosen profile or curve also applies at once. The safety floor always uses the
+live reading: on every poll, a fan is kept at 30% or more while its own
+component or the CPU is at or above 85 \(deC.
+.PP
 On Intel machines it can also allow or forbid CPU turbo boost, through the
 intel_pstate
 .I no_turbo
