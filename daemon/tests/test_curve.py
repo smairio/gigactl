@@ -234,3 +234,16 @@ def test_a_burst_right_after_a_profile_change_is_ignored_too():
     first = e.decide(curve.CPU_FAN, 51)
     later = [e.decide(curve.CPU_FAN, t) for t in (63, 80, 53, 52)]
     assert first == 51 and later == [None, None, None, None]
+
+
+def test_a_failed_write_keeps_the_temperature_history():
+    """A failed EC write says nothing about the temperatures. The engine must
+    re-send its duty, because it was never applied, without forgetting what it
+    has seen; otherwise the reading right after a failed write would fill the
+    whole spike filter, and a burst at that moment would move the fans."""
+    e = curve.ProfileEngine()
+    e.set_profile("performance")
+    for t in (51, 51, 51, 51, 51):
+        e.decide(curve.CPU_FAN, t)
+    e.retry_next_tick()  # the daemon's write just failed
+    assert e.decide(curve.CPU_FAN, 80) == 51  # re-sent; the spike is ignored

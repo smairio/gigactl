@@ -163,10 +163,12 @@ class ProfileEngine:
         self._reset_state()
 
     def retry_next_tick(self) -> None:
-        """Forget the last applied duty/temp after a failed EC write, so the
-        next tick computes (and attempts) the duty again instead of believing
-        a write that never landed is already in effect."""
-        self._reset_state()
+        """Forget the last applied duty after a failed EC write, so the next
+        tick computes (and attempts) the duty again instead of believing a
+        write that never landed is already in effect. The temperature history
+        stays: a failed write says nothing about the temperatures, and an
+        emptied spike filter would let the very next reading fill it."""
+        self._last_duty = {f: None for f in FANS}
 
     def set_manual(self) -> None:
         """A manual duty override is in effect; the engine stops driving until
